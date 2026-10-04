@@ -1213,8 +1213,10 @@ At run time the probability is $p=\sigma(\ell)$ and a candidate is vetoed iff $p
 ### 20.10 Metrics [`metrics.js`, `videoTracker.js`]
 
 $$\mathrm{RMSE}=\sqrt{\tfrac1N\sum_k e_k^2},\qquad
-\text{lock retention}=\frac{\#\{\text{frames in TRACK/COAST, beacon in FOV, estimate within 60 px}\}}{\#\{\text{frames since first lock}\}},\qquad
-\text{loss}=\frac{\#\{\text{beacon outside FOV after first lock}\}}{\#\{\text{frames since first lock}\}}$$
+\text{lock retention}=\frac{N_{\text{locked}}}{N_{\text{since lock}}},\qquad
+\text{loss}=\frac{N_{\text{outside FOV}}}{N_{\text{since lock}}}$$
+
+where $N_{\text{since lock}}$ is the number of frames since the first lock, $N_{\text{locked}}$ the number of those frames in TRACK or COAST with the beacon in the FOV and the estimate within 60 px of it, and $N_{\text{outside FOV}}$ the number with the beacon outside the FOV.
 
 Acquisition time is the simulation time from the start to the first confirmed lock; re-acquisition time is the time from leaving TRACK to the next TRACK (maximum over events);
 P95 is the 95th percentile of the per-frame centroid error.
