@@ -47,7 +47,7 @@ export const DEFAULTS = {
   fps: 30, // camera update rate (>= 30 Hz)
   maxPanSpeed: 5, // deg/s (5-10)
   maxTiltSpeed: 5,
-  maxAccel: 20, // deg/s^2 (gimbal acceleration limit, not specified by the statement)
+  maxAccel: 60, // deg/s^2 (gimbal acceleration limit; NOT specified by the statement. 20 and 100 are also reported in the docs)
   extraLatency: 0, // additional command latency, frames
 
   // Target (P07-P12)
@@ -82,10 +82,14 @@ export const DEFAULTS = {
   background: 20,
 
   // Tracker
-  acquisition: 'overview', // overview | scan
-  controlGain: 0.85,
+  acquisition: 'overview', // overview (extra wide sensor while searching) | scan (fixed FOV raster) | zoom (single camera zooms out, then in)
+  zoomRate: 12, // deg/s lens zoom speed (zoom acquisition)
+  controlGain: 0.6,
   coastFrames: 20,
   detectThreshold: 6,
+  aiVerifier: false, // learned CNN verifier on detector candidates (see ml/ and docs)
+  aiMinProb: 0.5,
+  aiRefine: false, // apply the CNN's sub-pixel offset to the centroid
 };
 
 export function clampConfig(c) {
@@ -103,6 +107,7 @@ export function clampConfig(c) {
   o.saltPepperDensity = cl(o.saltPepperDensity, 0, 0.1);
   o.gaussianSigma = cl(o.gaussianSigma, 0, 20);
   o.fovX = cl(o.fovX, 1, 12);
+  o.zoomRate = cl(o.zoomRate, 3, 60);
   o.numTargets = Math.round(cl(o.numTargets, 1, 6));
   o.atmosphereLevel = cl(o.atmosphereLevel, 0, 1);
   o.turbulence = cl(o.turbulence, 0, 1);

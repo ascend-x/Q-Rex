@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Simulation } from './engine/simulation.js'
-import { camScale, DEFAULTS, SCENARIOS, MOTIONS, ATMOSPHERES, clampConfig } from './engine/config.js'
+import { DEFAULTS, SCENARIOS, MOTIONS, ATMOSPHERES, clampConfig } from './engine/config.js'
 import Logo from './Logo.jsx'
 import { computeMetrics, recordsToCSV, metricsToHTML } from './engine/metrics.js'
 import { loadVideo, runVideo, videoRowsToCSV } from './engine/videoRunner.js'
 import { parseGroundTruth } from './engine/videoTracker.js'
 import { SECTIONS, LIVE_KEYS } from './fields.js'
 import './index.css'
+
+// readable names + units for the Benchmark-2 metrics table (raw key kept as the row tooltip)
+const METRIC_LABELS = {
+  frames: ['Frames processed', ''], frameSize: ['Frame size', 'px'], simulationDurationSec: ['Video duration', 's'],
+  averageFPS: ['Tracker speed', 'FPS'], processingTimeMeanMs: ['Processing time per frame', 'ms'],
+  acquisitionTimeSec: ['Acquisition time', 's'], lockRetentionRatePct: ['Lock retention', '%'],
+  reacquisitionEvents: ['Re-acquisition events', ''], reacquisitionTimeMaxSec: ['Re-acquisition time (max)', 's'],
+  centroidingErrorRmsePx: ['Centroid error · RMSE', 'px'], centroidingErrorMeanPx: ['Centroid error · mean', 'px'],
+  centroidingErrorP95Px: ['Centroid error · 95th percentile', 'px'], centroidingErrorMaxPx: ['Centroid error · max', 'px'],
+  groundTruthFrames: ['Frames with ground truth', ''], offsetFromCentreMeanPx: ['Mean offset from frame centre', 'px'],
+}
 
 const STATE_COLOR = { TRACK: '#059669', COAST: '#d97706', SLEW: '#2563eb', SEARCH: '#6b7280', REACQUIRE: '#dc2626' }
 
@@ -109,6 +120,8 @@ export default function App() {
   const [videoFps, setVideoFps] = useState(30)
   const [videoName, setVideoName] = useState('')
   const [gtName, setGtName] = useState('')
+  const [videoAI, setVideoAI] = useState(false)
+  const [gtConv, setGtConv] = useState('index')
   const cancelRef = useRef({ stop: false })
 
   runRef.current.running = running
@@ -129,6 +142,7 @@ export default function App() {
     const sim = simRef.current
     if (!sim || !sim.records.length) return
     const m = computeMetrics(sim.records, sim.cfg, sim.wallTotal / 1000)
+    runRef.current.savedK = sim.k
     if (kind === 'all' || kind === 'json') download('performance_report.json', JSON.stringify(m, null, 2), 'application/json')
     if (kind === 'all' || kind === 'html') setTimeout(() => download('performance_report.html', metricsToHTML(m), 'text/html'), 250)
     if (kind === 'all' || kind === 'csv') setTimeout(() => download('tracking_log.csv', recordsToCSV(sim.records), 'text/csv'), 500)
@@ -144,6 +158,16 @@ export default function App() {
   }, [restart])
 
   useEffect(() => { restart(cfg) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // endless runs: warn before the page/window closes with an unsaved log
+  useEffect(() => {
+    const warn = (e) => {
+      const sim = simRef.current
+      if (sim && sim.cfg.duration === 0 && sim.k - (runRef.current.savedK || 0) > 30) { e.preventDefault(); e.returnValue = '' }
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [])
 
   // ---- drawing
   const draw = useCallback(() => {
@@ -173,7 +197,7 @@ export default function App() {
     ctx.fillStyle = '#fff'; ctx.font = 'bold 12px monospace'
     ctx.fillText(`${out.state}  t=${sim.last.rec.t.toFixed(2)}s`, 8, 15)
     ctx.fillStyle = 'rgba(255,255,255,.7)'
-    ctx.fillText(`FOV ${sim.cfg.fovX}°×${(sim.cfg.fovX * h / w).toFixed(1)}°  ${w}×${h}`, 8, h - 8)
+    ctx.fillText(`FOV ${sim.fov.toFixed(1)}°×${(sim.fov * h / w).toFixed(1)}°  ${w}×${h}`, 8, h - 8)
 
     // minimap
     const mc = mapRef.current
@@ -193,7 +217,7 @@ export default function App() {
       m.strokeStyle = 'rgba(255,77,224,.55)'; m.beginPath()
       for (let i = n0; i < recs.length; i++) { const x = recs[i].worldX * S, y = recs[i].worldY * S; if (i === n0) m.moveTo(x, y); else m.lineTo(x, y) }
       m.stroke()
-      const sc = camScale(sim.cfg)
+      const sc = sim.last.scale
       const { view } = sim.last
       m.strokeStyle = '#38bdf8'; m.lineWidth = 1.5
       m.strokeRect((view.cx - (w / 2) * sc) * S, (view.cy - (h / 2) * sc) * S, w * sc * S, h * sc * S)
@@ -283,6 +307,8 @@ export default function App() {
         while ((acc >= dt || r.speed >= 50) && performance.now() - t0 < budget && steps < 400) {
           sim.step(); acc -= dt; steps++
           if (sim.cfg.duration > 0 && sim.k >= sim.cfg.duration * sim.cfg.fps) { r.done = true; break }
+          // endless runs: write the performance log every 60 s of simulated time so nothing is lost
+          if (sim.cfg.duration === 0 && r.autoSave && sim.k % (60 * sim.cfg.fps) === 0) { exportAll('all'); break }
         }
         if (acc > 0.25) acc = 0
         if (r.done) { setDone(true); if (r.autoSave) exportAll('all') }
@@ -300,7 +326,7 @@ export default function App() {
       setStats(computeMetrics(sim.records, sim.cfg, sim.wallTotal / 1000))
       const o = sim.last.out, kf = sim.tracker.kf
       setLive({
-        state: o.state, t: sim.last.rec.t, err: sim.last.rec.errTrack, ms: sim.last.rec.procMs, frame: sim.k,
+        state: o.state, t: sim.last.rec.t, err: sim.last.rec.errTrack, ms: sim.last.rec.procMs, frame: sim.k, fov: sim.fov,
         sat: sim.last.rec.saturated, overview: o.overview, mu: o.mu, v: o.estWorld ? Math.hypot(o.estWorld.vx, o.estWorld.vy) : null,
         sp: o.estWorld ? o.estWorld.sp : null, roi: o.roi ? o.roi.r : null, cam: sim.last.cam, qScale: kf.initialised ? kf.qScale : null, rHat: kf.initialised ? Math.sqrt(kf.rHat) : null,
       })
@@ -346,7 +372,7 @@ export default function App() {
       const gtText = gtFile.current?.files?.[0] ? await gtFile.current.files[0].text() : null
       const vid = await loadVideo(file)
       const res = await runVideo(vid, {
-        fps: videoFps, gt: gtText ? parseGroundTruth(gtText) : null, cancel: cancelRef.current,
+        fps: videoFps, ai: videoAI, gtConvention: gtConv, gt: gtText ? parseGroundTruth(gtText, videoFps) : null, cancel: cancelRef.current,
         onFrame: (row, cv, p) => {
           const c = videoCanvas.current
           if (c) {
@@ -378,6 +404,8 @@ export default function App() {
     if (cfg.atmosphere !== 'clear') c.push(ATMOSPHERES[cfg.atmosphere]?.label ?? cfg.atmosphere)
     if (cfg.turbulence > 0) c.push(`turbulence ${cfg.turbulence}`)
     if (cfg.dropout) c.push('dropouts')
+    if (cfg.acquisition !== 'overview') c.push(cfg.acquisition === 'zoom' ? 'zoom acquisition' : 'raster scan')
+    if (cfg.aiVerifier) c.push('AI verifier')
     c.push(`seed ${cfg.seed}`)
     return c
   }, [cfg])
@@ -444,7 +472,7 @@ export default function App() {
 
         <div className="grid2">
           <section className="panel view">
-            <header>Virtual camera <span>{cfg.camW}×{cfg.camH} {cfg.cameraType === 'colour' ? 'colour' : 'mono'} · {cfg.fovX}°×{(cfg.fovX * cfg.camH / cfg.camW).toFixed(1)}°</span></header>
+            <header>Virtual camera <span>{cfg.camW}×{cfg.camH} {cfg.cameraType === 'colour' ? 'colour' : 'mono'} · {(live.fov ?? cfg.fovX).toFixed(1)}°×{((live.fov ?? cfg.fovX) * cfg.camH / cfg.camW).toFixed(1)}°{cfg.acquisition === 'zoom' ? ' (zoom)' : ''}</span></header>
             <div className="camwrap">
               <canvas key={`${cfg.camW}x${cfg.camH}`} ref={camRef} width={cfg.camW} height={cfg.camH} className="cam" style={{ aspectRatio: `${cfg.camW}/${cfg.camH}`, maxWidth: cfg.camW }} />
             </div>
@@ -511,9 +539,9 @@ export default function App() {
           <div className="bench-body">
             <div className="bench-controls">
               <div className="bstep"><i>1</i><div><b>Video file</b><FilePick inputRef={videoFile} accept="video/*,.mp4" label="Choose .mp4" name={videoName} onPick={setVideoName} /></div></div>
-              <div className="bstep"><i>2</i><div><b>Ground truth <small>optional</small></b><FilePick inputRef={gtFile} accept=".csv,.txt" label="Choose CSV" name={gtName} onPick={setGtName} /><span className="hint">Lines of <code>frame,x,y</code> — 0-based frame, pixel-index coordinates. Enables centroid-error metrics.</span></div></div>
+              <div className="bstep"><i>2</i><div><b>Ground truth <small>optional</small></b><FilePick inputRef={gtFile} accept=".csv,.txt" label="Choose CSV" name={gtName} onPick={setGtName} /><span className="hint">Rows of <code>frame,x,y</code> (or <code>time_s,x,y</code>); header optional, 0- or 1-based frames auto-detected. Enables centroid-error metrics.</span><label className="fsel">Coordinate convention <select value={gtConv} onChange={(e) => setGtConv(e.target.value)}><option value="index">pixel index (centre of 1st pixel = 0)</option><option value="edge">pixel edge (centre of 1st pixel = 0.5)</option></select></label></div></div>
               <div className="bstep"><i>3</i><div><b>Run</b>
-                <div className="brow"><label>Video fps <input type="number" min={1} max={120} value={videoFps} onChange={(e) => setVideoFps(Number(e.target.value))} /></label></div>
+                <div className="brow"><label>Video fps <input type="number" min={1} max={120} value={videoFps} onChange={(e) => setVideoFps(Number(e.target.value))} /></label><label className="check" style={{ margin: 0 }}><input type="checkbox" checked={videoAI} onChange={(e) => setVideoAI(e.target.checked)} /> AI verifier (CNN v4)</label></div>
                 <div className="brow"><button className="btn primary wide" disabled={video.busy} onClick={runVideoBench}>{video.busy ? `Processing… ${(video.progress * 100).toFixed(0)}%` : '▶ Run on video'}</button>{video.busy && <button className="btn" onClick={() => { cancelRef.current.stop = true }}>Stop</button>}</div>
                 {(video.busy || video.progress > 0) && <div className="progress"><div style={{ width: `${(video.progress * 100).toFixed(0)}%` }} /></div>}
                 {video.error && <div className="warn">{video.error}</div>}
@@ -537,7 +565,7 @@ export default function App() {
                       <div className="mcard"><span>Frames</span><b>{m.frames}</b></div>
                     </div>
                     <details className="alltable"><summary>All metrics</summary>
-                      <table className="tbl small"><tbody>{Object.entries(m).map(([k, v]) => <tr key={k}><td>{k}</td><td>{String(v ?? 'n/a')}</td></tr>)}</tbody></table>
+                      <table className="tbl small metrics"><tbody>{Object.entries(m).map(([k, v]) => { const [label, unit] = METRIC_LABELS[k] ?? [k, '']; return <tr key={k} title={k}><td>{label}</td><td>{v == null ? <span className="na">n/a{k.startsWith('centroiding') ? ' · needs ground truth' : ''}</span> : <>{String(v)}{unit && <small> {unit}</small>}</>}</td></tr> })}</tbody></table>
                     </details>
                     <div className="brow">
                       <button className="btn" onClick={() => download('video_centroids.csv', videoRowsToCSV(video.result.rows), 'text/csv')}>Centroid log CSV</button>

@@ -27,3 +27,10 @@ dist-ssr
 release
 desktop/q-rex.html
 docs/*.html
+ml/data/
+ml/data_v3/
+
+# python / training scratch
+__pycache__/
+*.pyc
+ml/check.json

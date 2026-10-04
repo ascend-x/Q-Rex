@@ -4,6 +4,7 @@
 import { Detector } from './detector.js';
 import { IMM } from './kalman.js';
 import { camScale, PPD } from './config.js';
+import { getNet } from './ai.js';
 
 export const STATES = { SEARCH: 'SEARCH', SLEW: 'SLEW', TRACK: 'TRACK', COAST: 'COAST', REACQUIRE: 'REACQUIRE' };
 
@@ -13,12 +14,11 @@ export class CoarseTracker {
   constructor(cfg) {
     this.cfg = cfg;
     this.det = new Detector();
-    this.kf = new IMM({ qCV: cfg.qCV ?? 2e4, qCA: cfg.qCA ?? 5e7 });
+    this.kf = new IMM({ qCV: cfg.qCV ?? 3e4, qCA: cfg.qCA ?? 3e7, adapt: cfg.qAdapt ?? true, qScale0: cfg.qScale0 ?? 0.1, qFloor: cfg.qFloor ?? 0.05, qMax: cfg.qMax ?? 0.4 });
     this.vmax = [cfg.maxPanSpeed * PPD, cfg.maxTiltSpeed * PPD];
     this.amax = cfg.maxAccel * PPD;
-    this.scale = camScale(cfg);
-    this.sizes = uniqueSizes([5, 7, 10, 14, 20].map((s) => Math.max(2, Math.round(s / this.scale))));
     this.ovSizes = [1, 2, 3, 5];
+    this._setScale(camScale(cfg));
     this.thr = cfg.detectThreshold;
     this.reset();
   }
@@ -34,16 +34,30 @@ export class CoarseTracker {
     this.noOverview = 0;
     this.arrived = 0;
     this.lastSize = null;
+    this.lastSizeScreen = null;
     this.scanIdx = 0;
     this.trackConfirm = 0;
     this.frames = 0;
   }
 
+  /** Screen px per camera px for the current frame (changes with the zoom lens). Matched-filter box sizes follow it. */
+  _setScale(scale) {
+    if (this.scale === scale) return;
+    this.scale = scale;
+    this.sizes = uniqueSizes([5, 7, 10, 14, 20].map((s) => Math.max(2, Math.round(s / scale))));
+  }
+
+  _noteSize(sizeCamPx) {
+    this.lastSize = sizeCamPx;
+    this.lastSizeScreen = sizeCamPx * this.scale;
+  }
+
   _roiSizes() {
-    if (this.lastSize == null) return this.sizes;
-    const i = this.sizes.indexOf(this.lastSize);
-    if (i < 0) return this.sizes;
-    return this.sizes.slice(Math.max(0, i - 1), i + 2);
+    if (this.lastSizeScreen == null) return this.sizes;
+    const target = this.lastSizeScreen / this.scale;
+    let bi = 0, bd = Infinity;
+    this.sizes.forEach((v, i) => { const d = Math.abs(v - target); if (d < bd) { bd = d; bi = i; } });
+    return this.sizes.slice(Math.max(0, bi - 1), bi + 2);
   }
 
   /** World measurement (screen px) from a narrow-frame centroid. */
@@ -76,17 +90,35 @@ export class CoarseTracker {
   _narrow(obs, center, R, sizes) {
     const { data, w, h } = obs.narrow;
     const roi = center ? { x0: center.x - R, y0: center.y - R, x1: center.x + R, y1: center.y + R } : { x0: 0, y0: 0, x1: w, y1: h };
-    const r = this.det.detectROI(data, w, h, roi, { sizes, threshold: this.thr, maxCands: 5 });
+    const r = this.det.detectROI(data, w, h, roi, { sizes, threshold: this.thr, maxCands: this.cfg.aiVerifier && !center ? 8 : 5, impulseFilter: this.sizes[0] <= 3 ? 'switching' : 'median' /* zoomed-out beacons are 1-3 px: keep them */ });
     for (const c of r.cands) c.noise = r.sigma;
-    return r.cands;
+    // the learned verifier only judges full-frame SEARCH detections; inside a tracking window the prediction gate already fixes identity
+    return this.cfg.aiVerifier && !center ? this._verify(r.cands, 8) : r.cands;
+  }
+
+  /** Learned verifier: drop candidates the CNN judges not to be a beacon; optionally apply its sub-pixel offset. */
+  _verify(cands, limit = 8) {
+    const net = (this.net ??= getNet());
+    const last = this.det.last;
+    const out = [];
+    for (const c of cands.slice(0, limit)) {
+      const o = net.evaluate(last, c.x, c.y);
+      c.p = o.p;
+      // fail-safe: a very strong classical detection is kept even if the network (trained on simulator data) disagrees
+      if (o.p < this.cfg.aiMinProb && c.z < 25) continue;
+      if (this.cfg.aiRefine) { c.x += o.dx; c.y += o.dy; }
+      out.push(c);
+    }
+    return out; // keep the classical SNR order: the network vetoes, it does not re-rank (p saturates near 1)
   }
 
   /** Main per-frame entry. Returns command + diagnostics. */
   process(obs) {
     const { cfg, kf } = this;
     const dt = obs.dt;
-    const out = { state: this.state, cmd: { vx: 0, vy: 0 }, det: null, est: null, roi: null, overview: false, estWorld: null, mu: null };
+    const out = { state: this.state, cmd: { vx: 0, vy: 0 }, det: null, est: null, roi: null, overview: false, estWorld: null, mu: null, zoom: null };
     this.frames++;
+    this._setScale(obs.scale ?? camScale(cfg));
 
     const wrapped = () => {
       switch (this.state) {
@@ -106,16 +138,18 @@ export class CoarseTracker {
       out.est = this._toImage(obs, s.px, s.py);
       out.mu = kf.mu;
       out.cmd = this._control(obs, dt);
-    } else if (this.state === STATES.SEARCH && cfg.acquisition === 'scan') {
-      out.cmd = this._scanCommand(obs);
+    } else if ((this.state === STATES.SEARCH || this.state === STATES.REACQUIRE) && (cfg.acquisition === 'scan' || (cfg.acquisition === 'zoom' && this.searchAge > 2 * obs.fps))) {
+      out.cmd = this._scanCommand(obs); // strict mode scans from the start; zoom mode falls back to a scan at a mid FOV after 2 s without a detection
     }
+    if (cfg.acquisition === 'zoom') out.zoom = this._zoomTarget(obs);
     return out;
   }
 
   _search(obs, out) {
     const cfg = this.cfg;
+    this.searchAge = (this.searchAge || 0) + 1;
     let cands;
-    if (cfg.acquisition === 'scan') {
+    if (cfg.acquisition !== 'overview') {
       cands = this._narrow(obs, null, 0, this.sizes).map((c) => ({ ...this._toWorld(obs, c), z: c.z, amp: c.amp, size: c.size, noise: c.noise, edge: c.edge, img: c }));
       out.det = cands[0]?.img ?? null;
     } else {
@@ -128,22 +162,25 @@ export class CoarseTracker {
     else this.confirm = 1;
     this.prevCand = best;
     if (this.confirm >= 2) {
-      this.kf.init(best.x, best.y, cfg.acquisition === 'scan' ? 3 : 6);
+      this.kf.init(best.x, best.y, cfg.acquisition === 'overview' ? 6 : 3 * this.scale);
       this.lastKnown = { x: best.x, y: best.y };
       this.confirm = 0;
+      this.searchAge = 0;
       this.coastAge = 0;
       this.slewAge = 0;
       this.noOverview = 0;
       this.arrived = 0;
       this.trackConfirm = 0;
       this.lastSize = null;
-      this.state = cfg.acquisition === 'scan' ? STATES.TRACK : STATES.SLEW;
-      if (cfg.acquisition === 'scan') this.lastSize = best.img?.size ?? null;
+    this.lastSizeScreen = null;
+      this.state = cfg.acquisition === 'overview' ? STATES.SLEW : STATES.TRACK;
+      if (cfg.acquisition !== 'overview' && best.img) this._noteSize(best.img.size);
     }
   }
 
   _slew(obs, out, dt) {
     const { kf } = this;
+    const cfg0 = this.cfg;
     kf.predict(dt);
     this.slewAge++;
     const s = kf.state;
@@ -159,7 +196,7 @@ export class CoarseTracker {
         out.det = c;
         const z = this._toWorld(obs, c);
         kf.update(z.x, z.y, this._measSigma(c));
-        this.lastSize = c.size;
+        this._noteSize(c.size);
         gotNarrow = true;
         this.trackConfirm++;
         // the beacon identity was already confirmed on the wide view: one detection agreeing with the prediction is enough
@@ -167,7 +204,8 @@ export class CoarseTracker {
         if (this.trackConfirm >= 2 || agree) { this.state = STATES.TRACK; this.arrived = 0; return; }
       } else this.trackConfirm = 0;
     } else this.trackConfirm = 0;
-    if (!gotNarrow) {
+    if (!gotNarrow && cfg0.acquisition !== 'overview') this.noOverview++;
+    else if (!gotNarrow) {
       // keep steering with the wide view
       const cands = this._overview(obs, { x: s.px, y: s.py });
       out.overview = true;
@@ -205,7 +243,7 @@ export class CoarseTracker {
       out.det = c;
       const z = this._toWorld(obs, c);
       const r = kf.update(z.x, z.y, this._measSigma(c));
-      this.lastSize = c.size;
+      this._noteSize(c.size);
       if (r.accepted) { this.lastKnown = { x: kf.state.px, y: kf.state.py }; this.coastAge = 0; return; }
     }
     this.coastAge = 1;
@@ -226,18 +264,20 @@ export class CoarseTracker {
       out.det = c;
       const z = this._toWorld(obs, c);
       kf.update(z.x, z.y, this._measSigma(c), { gate: 40 });
-      this.lastSize = c.size;
+      this._noteSize(c.size);
       this.state = STATES.TRACK;
       this.coastAge = 0;
       return;
     }
-    // wide view assists the recovery
-    const ov = this._overview(obs, { x: s.px, y: s.py });
-    out.overview = true;
-    const gate = 200 + 4 * s.sp;
-    let best = null, bd = Infinity;
-    for (const o of ov) { const d = Math.hypot(o.x - s.px, o.y - s.py); if (d < gate && d < bd) { bd = d; best = o; } }
-    if (best) kf.update(best.x, best.y, 5, { gate: 60 });
+    // wide view assists the recovery (only when the separate wide sensor is the configured acquisition aid)
+    if (cfg.acquisition === 'overview') {
+      const ov = this._overview(obs, { x: s.px, y: s.py });
+      out.overview = true;
+      const gate = 200 + 4 * s.sp;
+      let best = null, bd = Infinity;
+      for (const o of ov) { const d = Math.hypot(o.x - s.px, o.y - s.py); if (d < gate && d < bd) { bd = d; best = o; } }
+      if (best) kf.update(best.x, best.y, 5, { gate: 60 });
+    }
     if (this.coastAge > cfg.coastFrames) this._lose();
   }
 
@@ -270,12 +310,31 @@ export class CoarseTracker {
     return { vx: u[0], vy: u[1] };
   }
 
+  /**
+   * Zoom-lens controller (acquisition = 'zoom'): the single camera starts at the full-screen FOV so the whole scene is in view,
+   * then narrows its FOV only as fast as the pointing error allows (keeping the beacon inside the frame), and widens again
+   * while the beacon is missing. Returns the desired horizontal FOV in degrees.
+   */
+  _zoomTarget(obs) {
+    const cfg = this.cfg, fmin = cfg.fovX, fmax = Math.max(fmin, cfg.screenSize / (PPD * (cfg.camH / cfg.camW)));
+    if (!this.kf.initialised || this.state === STATES.SEARCH || this.state === STATES.REACQUIRE) {
+      // nothing seen on the full-screen view for 2 s (beacon sub-pixel or buried in impulse noise): zoom in to a mid FOV and scan
+      return this.searchAge > 2 * obs.fps ? Math.min(fmax, Math.max(fmin, 6)) : fmax;
+    }
+    const s = this.kf.state, aspect = obs.narrow.h / obs.narrow.w, m = 60 + 4 * s.sp;
+    const dx = Math.abs(s.px - obs.cam.x) + m, dy = Math.abs(s.py - obs.cam.y) + m;
+    let need = Math.max((2 * dx) / PPD, (2 * dy) / (PPD * aspect));
+    if (this.state === STATES.COAST) need = Math.max(need, fmin + this.coastAge * 0.8);
+    return Math.min(fmax, Math.max(fmin, need));
+  }
+
   _scanCommand(obs) {
     const size = this.cfg.screenSize;
     const rowStep = 0.8 * obs.narrow.h * this.scale;
     const rows = [];
     for (let y = 0.5 * obs.narrow.h * this.scale; y < size; y += rowStep) rows.push(Math.min(y, size - 0.5 * obs.narrow.h * this.scale));
-    if (!this.scanWps) {
+    if (!this.scanWps || Math.abs(this.scanScale / this.scale - 1) > 0.05) {
+      this.scanScale = this.scale;
       const x0 = 0.5 * obs.narrow.w * this.scale, x1 = size - x0;
       this.scanWps = [];
       rows.forEach((y, i) => { if (i % 2 === 0) this.scanWps.push({ x: x1, y }, { x: x1, y: rows[i + 1] ?? y }); else this.scanWps.push({ x: x0, y }, { x: x0, y: rows[i + 1] ?? y }); });

@@ -71,9 +71,12 @@ export const SECTIONS = [
   {
     title: 'Tracker',
     fields: [
-      { k: 'acquisition', label: 'Acquisition', type: 'select', opts: [['overview', 'Wide-view overview (fast)'], ['scan', 'Raster scan (no overview)']], restart: true },
+      { k: 'acquisition', label: 'Acquisition', type: 'select', opts: [['overview', 'Wide-view overview (extra wide sensor)'], ['zoom', 'Zoom lens (single camera zooms out, then in)'], ['scan', 'Raster scan (fixed FOV, slow)']], restart: true },
+      { k: 'zoomRate', label: 'Zoom speed (°/s)', type: 'num', min: 3, max: 60, step: 1, show: (c) => c.acquisition === 'zoom' },
       { k: 'controlGain', label: 'Control gain', type: 'num', min: 0.2, max: 1, step: 0.05 },
       { k: 'detectThreshold', label: 'Detection threshold (σ)', type: 'num', min: 4, max: 10, step: 0.5 },
+      { k: 'aiVerifier', label: 'AI verifier (CNN v4, 74 k params) on detections', type: 'check' },
+      { k: 'aiRefine', label: 'Apply CNN sub-pixel offset', type: 'check', show: (c) => c.aiVerifier },
       { k: 'coastFrames', label: 'Coast before re-search (frames)', type: 'int', min: 3, max: 90 },
     ],
   },

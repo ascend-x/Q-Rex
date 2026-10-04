@@ -18,8 +18,8 @@ Every row maps to the module that implements it and the automated test that prov
 | 12 | ≥ 4 motions; optional spiral, sinusoidal, user-defined | `motion.js` (7 motions) | spec #12 (all 7 tracked, constant speed verified in engine tests) |
 | 13-14 | Max pan/tilt 5–10 °/s, default 5 | `gimbal.js` | spec #13-14 (per-frame move never exceeds limit at 5 and 10 °/s) |
 | 15 | Update interval ≥ 20 Hz | control computed every frame | spec #15 |
-| 16 | Acquisition ≤ 2 s | overview acquisition, `tracker.js` | spec #16-20, bench A/B (0.6–1.9 s) |
-| 17 | Tracking error ≤ 10 px | IMM + controller | spec #16-20, bench (0.1–6.7 px; C1 fails: 19 px) |
+| 16 | Acquisition ≤ 2 s | wide-view acquisition or camera-only **zoom lens** (`tracker.js`, `simulation.js`) | spec #16-20, `tests/zoom.test.mjs`, bench A/B (0.6–1.9 s overview; 0.03 s detect / ≤ 1.3 s centred zoom) |
+| 17 | Tracking error ≤ 10 px | IMM + controller | spec #16-20, bench (0.1–6.3 px; C1 all-disturbances fails: 10.8 px) |
 | 18 | Target loss < 5 % | state machine | spec #16-20, bench |
 | 19 | Re-acquisition ≤ 1 s | COAST + overview assist | spec #19 (camera knocked off; 0.5 s dropouts) |
 | 20 | Processing ≥ 20 FPS | ROI detection, 2–8 ms/frame | spec #16-20 |
@@ -29,10 +29,15 @@ Every row maps to the module that implements it and the automated test that prov
 | 21.4 | Clear, haze, fog, rain, low light, user-defined reduction | `ATMOSPHERES`, severity | spec #21.4 (contrast drops, still tracked) |
 | 21.5 | Platform ±20 px/frame; linear default; circular, random, spiral, figure-8 | `makePlatformMotion` | spec #21.5 (step bound + tracked for all 5) |
 | — | Turbulence / vibration | `render.js`, `simulation.js` | spec turbulence test |
+| — | Endless-run performance log | auto-save every 60 s of simulated time, unload warning | `App.jsx` |
 | — | Real-time statistics display | `App.jsx` tiles, plot, minimap | browser run (screenshot) |
 | — | Performance log (duration, FPS, acquisition, avg/max error, lock retention, processing time) | `metrics.js` JSON/CSV/HTML, auto-save at end of run | spec "performance log" test |
 | — | Benchmark 1: scenarios + centroiding-error log + auto logs | scenario suite, `scripts/bench.mjs` | `RESULTS.md` |
 | — | Benchmark 2: .mp4 @30 fps, PTZ bypassed, centroid error, RMSE, acq/re-acq, lock, FPS | `videoTracker.js`, `videoRunner.js` | `npm run e2e` (H.264 video, ground truth, RMSE 0.07 px) |
+| — | AI-based (title) | trained CNN verifier v4 (74 k parameters) `cnn.js` / `ml/train.py` + adaptive IMM estimation | `tests/ai.test.mjs` (8 tests), `npm run ai:eval` ablation, report §7 |
+| — | Optional demo video (3–5 min) | `scripts/make-demo-video.cjs` → `demo/q-rex-demo.mp4` | the recorded file |
+| — | Unseen judge videos (robustness) | tolerant loaders; `scripts/video-robustness.mjs` (21 videos: 4 resolutions, H.264/MPEG-4, 25/29.97/30 fps, noise types, sizes/shapes/brightness, blink-out, 5 hard cases) | 20 of 21 meet the pass line, centroid error 0.01–0.76 px; the 21st (dim, crf 36, 10 % S&P) is informational: 90 % lock, 15 px RMSE |
+| — | Windows / macOS executables verified | `desktop/main.cjs --selftest`, `.github/workflows/ci.yml` builds and smoke-tests on real Windows / macOS / Linux runners | self-test passes on Linux; CI run pending the first push |
 | — | Standalone executable | Electron shell (`npm run build:exe`) and single offline HTML (`npm run build:single`) | launched on Linux |
 | — | Source code modular and documented | `src/engine/*` | README, this report |
 | — | Technical report, user manual | `docs/TECHNICAL_REPORT.md`, `docs/USER_MANUAL.md` | — |

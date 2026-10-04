@@ -20,6 +20,9 @@ export function computeMetrics(records, cfg, wallSeconds) {
   const tLock = firstTrack >= 0 ? records[firstTrack].t : NaN;
   const firstCentred = records.findIndex((r) => r.errTrack <= 10 && firstTrack >= 0 && r.k >= firstTrack);
   const tCentre = firstCentred >= 0 ? records[firstCentred].t : NaN;
+  // zoom acquisition: first time the lens is back at the configured (narrow) FOV with the beacon centred within 10 px
+  const firstNarrow = records.findIndex((r) => r.state === 'TRACK' && r.fov <= cfg.fovX + 0.05 && r.errTrack <= 10);
+  const tNarrow = firstNarrow >= 0 ? records[firstNarrow].t : NaN;
 
   const after = firstTrack >= 0 ? records.slice(firstTrack) : [];
   const steadyStart = firstCentred >= 0 ? firstCentred : n;
@@ -63,6 +66,7 @@ export function computeMetrics(records, cfg, wallSeconds) {
     processingTimeMaxMs: f(Math.max(...proc), 2),
     acquisitionTimeSec: f(tLock, 3),
     timeToCentreSec: f(tCentre, 3),
+    timeToNarrowFovCentredSec: f(tNarrow, 3),
     trackingErrorMeanPx: f(mean(eTrack), 2),
     trackingErrorRmsePx: f(rms(eTrack), 2),
     trackingErrorP95Px: f(pct(eTrack, 95), 2),

@@ -6,7 +6,7 @@
 
 **Option B — single file.** Open `dist-single/q-rex.html` in Chrome, Edge or Firefox. It is fully self-contained and works offline.
 
-**Option C — from source.** `npm install`, then `npm run dev` (GUI at http://localhost:5173), `npm test` (38 tests), `npm run bench -- 3 20` (headless scenario suite), `npm run e2e` (browser Benchmark-2 check; needs ffmpeg and chromium).
+**Option C — from source.** `npm install`, then `npm run dev` (GUI at http://localhost:5173), `npm test` (54 tests), `npm run bench -- 3 20` (headless scenario suite), `npm run e2e` (browser Benchmark-2 check; needs ffmpeg and chromium).
 
 ## 2. Quick start
 
@@ -17,26 +17,39 @@
 
 ## 3. GUI description
 
+**Home page** (`#/`, opens first): overview, specification-vs-measured table, architecture and state-machine diagrams, innovation tiles, tech stack, benchmark results and the honest limits. *Launch Workstation* opens the workstation (`#/app`); *← Home / overview* in the workstation sidebar returns.
+
+**Workstation top toolbar:** a **LIVE / PAUSED / RUN COMPLETE** badge, chips that summarise the active scenario (motion, size and shape, noise types, jitter, platform, atmosphere, dropouts, seed), the simulation **speed** selector (¼× … max), **Pause / Run**, **Restart**, and the **JSON / CSV / HTML** export buttons.
+
 **Left panel**
 
-* *Run / Restart*, *Sim speed* (¼× … max), *Show ground truth overlay*, *Auto-save report at end of run*.
+* *Show ground truth overlay*, *Auto-save report at end of run*.
 * *Load scenario*: applies a named benchmark scenario (A nominal, B single disturbance at spec maximum, C all maxima, plus dropouts and decoys).
-* Parameter sections (all values clamped to the specification ranges):
+* Collapsible parameter sections (all values clamped to the specification ranges):
 
 | Section | Parameters |
 |---|---|
 | Scenario & Run | random seed, run duration (0 = endless) |
-| Virtual Camera | camera type (monochrome default / colour), screen size (≥ 2000), camera width/height, FOV (default 4° horizontal), update rate (≥ 30 Hz), max pan/tilt speed 5–10 °/s, gimbal acceleration, extra command latency |
+| Virtual Camera | camera type (monochrome default / colour), screen size (≥ 2000), camera width/height, FOV (default 4° horizontal), update rate (≥ 30 Hz), max pan/tilt speed 5–10 °/s, gimbal acceleration (default 60 °/s²; not specified by the statement), extra command latency |
 | Target | motion (straight, circular, figure-8, random, spiral, sinusoidal, user waypoints), speed, size 5–20 px, shape, number of targets (1 beacon + decoys), initial location (random / user-defined), waypoints (x,y per line) |
 | Image Noise | salt & pepper (density ≤ 10 %), Gaussian (σ ≤ 20), Poisson — any combination |
 | Jitter, Platform, Atmosphere | jitter (± px/frame ≤ 20), platform motion (linear / circular / random / spiral / figure-8, ≤ 20 px/frame), atmosphere (clear, haze, fog, rain, low light) with severity, beacon dropouts, turbulence |
-| Tracker | acquisition mode (wide-view overview / raster scan), control gain, detection threshold, coast frames |
+| Tracker | acquisition mode (wide-view overview / **zoom lens** / raster scan), zoom speed, control gain, detection threshold, **AI verifier (CNN)** and its sub-pixel offset option, coast frames |
 
 * A yellow warning appears when target speed plus platform speed exceeds the gimbal limit (saturation expected).
 
-**Status bar** — current state (`SEARCH`, `SLEW`, `TRACK`, `COAST`, `REACQUIRE`) and tiles: acquisition time (≤ 2 s), mean tracking error with RMSE/max (≤ 10 px), centroid error RMSE/P95, target loss and lock retention (< 5 %), maximum re-acquisition time (≤ 1 s), tracker FPS and ms/frame (≥ 20 FPS).
+**Acquisition modes (Tracker section).** *Wide-view overview* (default): a 4×-binned view of the whole screen is used only while searching or re-acquiring, the narrow camera tracks. *Zoom lens (single camera)*: no extra sensor — the camera starts at the full-screen FOV (≈ 16.7° so the 4:3 frame covers the whole screen), detects the beacon, then narrows its FOV at the *Zoom speed* while centring; it zooms out again if the beacon is lost. The camera header and the *Lens FOV* telemetry row show the live FOV; errors are always reported in pixels of the configured FOV. In the all-disturbances case it can need slightly more than 2 s to detect. *Raster scan*: fixed-FOV sweep, cannot meet 2 s (≈ 5–13 s).
 
-**Virtual camera view** — the 640×480 image with overlays: red cross = boresight, green square = detection, yellow circle = filter estimate, cyan dashed box = search window, magenta circle = ground truth (optional). **Screen map** — the whole 2000×2000 screen with the camera footprint (blue box), target trail, true beacon (magenta) and estimate (green). **Live error** — boresight error of the last 300 frames with the 10 px line and a colour strip of tracker state.
+**Status bar** — current state (`SEARCH`, `SLEW`, `TRACK`, `COAST`, `REACQUIRE`) and tiles: acquisition time (≤ 2 s), mean tracking error with RMSE/max (≤ 10 px), centroid error RMSE/P95, target loss and lock retention (< 5 %), maximum re-acquisition time (≤ 1 s), tracker FPS and ms/frame (≥ 20 FPS). Green = met, red = missed.
+
+**Dashboard (2 × 2)**
+
+* *Virtual camera* (top left): the 640×480 image with overlays — red cross = boresight, green square = detection, yellow circle = filter estimate, cyan dashed box = search window, magenta circle = ground truth (optional). Shown at most at native size so it stays sharp.
+* *Screen map* (top right): the whole 2000×2000 screen as a true square with the camera footprint (blue box), beacon trail and dot (magenta) and the estimate (green).
+* *Live error* (bottom left): boresight error of the last 300 frames against the 10 px spec band, with a colour strip of tracker state. The line starts once the beacon is first centred; the y-axis rescales automatically.
+* *Tracker telemetry* (bottom right): state, sensing mode, camera pointing, estimated beacon speed, CV/CA model mix, filter position σ, learned measurement noise, search window, processing time and gimbal saturation.
+
+**Endless runs** (`duration = 0`): with *Auto-save* on, JSON, HTML and CSV are downloaded every 60 s of simulated time, and the browser asks for confirmation before the window is closed with unsaved frames.
 
 ## 4. Benchmark 1 — scenario suite
 
@@ -44,9 +57,9 @@ Set seconds per run and number of seeds, press *Run all scenarios*. Each scenari
 
 ## 5. Benchmark 2 — video input
 
-1. In the *Benchmark 2* panel choose the `.mp4` (full screen of any size, or a 640×480 camera image); optionally choose a ground-truth CSV with lines `frame,x,y` (0-based frame index, pixel-index coordinates). Set the video frame rate (30).
-2. Press *Run on video*. The PTZ model is bypassed: every frame is decoded exactly (seek per frame), converted to grey, and passed to the same detector/tracker logic. The preview shows the detection.
-3. The result table gives frames, processing FPS, acquisition time, lock retention, re-acquisition events/time, and — with ground truth — centroiding error mean/RMSE/P95/max. *Centroid log CSV* contains `frame,t,found,x,y,state,procMs` per frame; coordinates use the OpenCV pixel-index convention (centre of the first pixel = 0.0).
+1. In the *Benchmark 2* panel (step 1) choose the `.mp4` (full screen of any size, or a 640×480 camera image). Step 2 (optional): choose a ground-truth CSV — rows `frame,x,y` or `time_s,x,y`, comma / semicolon / tab separated, header optional, 0- or 1-based frames auto-detected — and select the *coordinate convention* — whether its coordinates are *pixel index* (centre of the first pixel = 0) or *pixel edge* (= 0.5). Step 3: set the video frame rate (30) and optionally tick *AI verifier (CNN)*.
+2. Press *Run on video* (a progress bar shows the decoding; *Stop* cancels). The PTZ model is bypassed: every frame is decoded exactly (seek per frame), converted to grey, and passed to the same detector/tracker logic. The preview shows the detection.
+3. Six result cards show acquisition, lock retention, centroid RMSE, tracker FPS, maximum re-acquisition and frame count; *All metrics* expands the full table. It gives frames, processing FPS, acquisition time, lock retention, re-acquisition events/time, and — with ground truth — centroiding error mean/RMSE/P95/max. *Centroid log CSV* contains `frame,t,found,x,y,state,procMs` per frame; coordinates use the OpenCV pixel-index convention (centre of the first pixel = 0.0).
 
 Frames ≥ 1000 px are treated as the whole screen: search runs on a 4× binned copy, tracking on a window at full resolution.
 
@@ -56,7 +69,8 @@ Frames ≥ 1000 px are treated as the whole screen: search runs on a 4× binned 
 
 ## 7. Troubleshooting
 
-* *Acquisition > 2 s*: the *Raster scan* mode cannot meet 2 s by physics (12 s sweep); use *Wide-view overview*.
+* *Acquisition > 2 s*: the *Raster scan* mode cannot meet 2 s by physics (12 s sweep); use *Wide-view overview* or *Zoom lens*. Zoom lens works under salt & pepper noise too (a switching median keeps the zoomed-out beacon); only the all-disturbances case is slower.
 * *Red tracking-error tile with platform + jitter at maximum*: expected limitation (see technical report §9).
 * *Video fails to load*: the browser must be able to decode the codec (H.264 is supported by Chrome/Edge/Electron).
 * *Slow GUI*: set Sim speed to 1×, or use the headless `npm run bench`.
+* *Check a desktop build:* `q-rex --selftest` (add `--selftest-shot=file.png` for a screenshot) renders the home page and the workstation, checks that the tracker locks, prints a JSON line and exits 0 on success. The GitHub workflow runs it on Windows, macOS and Linux.

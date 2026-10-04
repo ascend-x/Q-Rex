@@ -65,6 +65,9 @@ canvas { display: block; max-width: 100%; }
 .tbl th, .tbl td { border: 1.5px solid #bbb; padding: 4px 8px; text-align: left; }
 .tbl th { background: #eceae4; font: 700 .7rem var(--mono); text-transform: uppercase; }
 .tbl.small td { font-family: var(--mono); font-size: .76rem; padding: 2px 8px; }
+.tbl.metrics td:first-child { font-family: var(--sans); font-weight: 600; width: 58%; }
+.tbl.metrics tr:nth-child(even) td { background: #f6f5f0; }
+.tbl.metrics small { color: var(--muted); font-weight: 600; } .tbl.metrics .na { color: var(--muted); }
 .tbl .g { color: var(--green); font-weight: 700; } .tbl .r { color: var(--red); font-weight: 700; }
 .vrow { display: flex; gap: 16px; margin-top: 10px; flex-wrap: wrap; align-items: flex-start; }
 .vcanvas { background: #111; border: 2px solid var(--line); border-radius: 6px; }
@@ -79,7 +82,12 @@ input[type=number] { font-family: var(--mono); font-weight: 700; }
 input[type=range] { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 4px; background: #d9d6ce; border: 1.5px solid var(--line); }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2.5px solid var(--line); cursor: grab; }
 input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2.5px solid var(--line); cursor: grab; }
-input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+input[type=checkbox] { appearance: none; -webkit-appearance: none; flex: none; width: 17px; height: 17px; margin: 0; border: 2px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer; display: inline-grid; place-content: center; }
+input[type=checkbox]:checked { background: var(--accent); }
+input[type=checkbox]:checked::after { content: ''; width: 4px; height: 8px; border: solid #fff; border-width: 0 2.2px 2.2px 0; transform: translateY(-1px) rotate(45deg); }
+input[type=checkbox]:focus-visible { outline: 3px solid rgba(255, 84, 0, .35); outline-offset: 1px; }
+.fsel { display: flex; flex-direction: column; gap: 5px; font: 700 .72rem var(--mono); text-transform: uppercase; }
+.fsel select { width: 100%; border: 2px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 600 .82rem var(--sans); text-transform: none; box-shadow: 2px 2px 0 var(--line); }
 .filepick { position: relative; display: inline-flex; align-items: center; gap: 10px; border: 2px dashed var(--line); border-radius: 8px; padding: 6px 10px; background: #faf9f6; cursor: pointer; max-width: 100%; flex: 1 1 260px; min-width: 0; }
 .filepick:hover { background: #fff3ec; }
 .filepick input[type=file] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; padding: 0; border: 0; }

@@ -8,11 +8,15 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/engine.test.mjs tests/spec.test.mjs",
+    "test": "node --test tests/engine.test.mjs tests/spec.test.mjs tests/ai.test.mjs tests/zoom.test.mjs",
     "bench": "node scripts/bench.mjs",
     "build:single": "vite build && node scripts/inline-dist.mjs",
     "build:exe": "node scripts/build-exe.mjs",
-    "e2e": "node scripts/e2e-video.cjs"
+    "e2e": "node scripts/e2e-video.cjs",
+    "demo": "node scripts/make-demo-video.cjs",
+    "ai:data": "node scripts/gen-dataset.mjs",
+    "ai:eval": "node scripts/eval-ai.mjs",
+    "selftest": "cd desktop && ../node_modules/.bin/electron . --no-sandbox --selftest"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.3.0",

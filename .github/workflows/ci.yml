@@ -1,0 +1,55 @@
+# Builds the standalone desktop app on REAL Windows / macOS / Linux runners, smoke-tests it (--selftest: renders the home page,
+# opens the workstation, checks the tracker locks), and uploads each platform's app as an artifact.
+name: build-and-smoke-test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npx oxlint || true
+
+  desktop:
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  dir: q-rex-linux-x64,   exe: ./q-rex,                     shell: bash }
+          - { os: windows-latest, dir: q-rex-win32-x64,   exe: ./q-rex.exe,                 shell: pwsh }
+          - { os: macos-latest,   dir: q-rex-darwin-arm64, exe: ./q-rex.app/Contents/MacOS/q-rex, shell: bash }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build:exe
+      - name: Smoke test (Linux, virtual display)
+        if: runner.os == 'Linux'
+        working-directory: release/${{ matrix.dir }}
+        run: xvfb-run -a ${{ matrix.exe }} --no-sandbox --selftest --selftest-shot=../selftest-linux.png | tee ../selftest.log
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        working-directory: release/${{ matrix.dir }}
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath ${{ matrix.exe }} -ArgumentList '--selftest','--selftest-shot=..\selftest-windows.png' -RedirectStandardOutput ..\selftest.log -PassThru -Wait
+          Get-Content ..\selftest.log
+          if ($p.ExitCode -ne 0) { throw "selftest exit code $($p.ExitCode)" }
+      - name: Smoke test (macOS)
+        if: runner.os == 'macOS'
+        working-directory: release/${{ matrix.dir }}
+        run: ${{ matrix.exe }} --selftest --selftest-shot=../selftest-macos.png | tee ../selftest.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: q-rex-${{ matrix.dir }}
+          path: release/

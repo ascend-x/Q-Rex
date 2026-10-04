@@ -190,5 +190,5 @@ test('ground truth never reaches the tracker (tracker input = pixels + encoder o
   const orig = s.tracker.process.bind(s.tracker); s.tracker.process = (obs) => { seen.push(Object.keys(obs).sort().join(',')); return orig(obs); };
   s.run(1);
   assert.equal(new Set(seen).size, 1);
-  assert.equal(seen[0], 'cam,dt,fps,getOverview,k,narrow,t');
+  assert.equal(seen[0], 'cam,dt,fps,getOverview,k,narrow,scale,t'); // scale = the lens's own zoom state (known to the tracker), not ground truth
 });

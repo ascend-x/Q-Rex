@@ -39,10 +39,10 @@ async function makeVideo() {
   await inputs[1].uploadFile(csv);
   for (const bt of await p.$$('button')) if ((await bt.evaluate((e) => e.textContent)).includes('Run on video')) { await bt.click(); break; }
   await p.waitForFunction(() => [...document.querySelectorAll('button')].some((x) => x.textContent.includes('Centroid log CSV')) || document.querySelector('.warn'), { timeout: 180000 });
-  const m = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('.tbl.small tr')].map((r) => [r.cells[0].textContent, r.cells[1].textContent])));
+  const m = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('.tbl.small tr')].map((r) => [r.title || r.cells[0].textContent, r.cells[1].textContent])));
   await b.close();
   console.log(JSON.stringify(m, null, 1));
-  const ok = errs.length === 0 && Number(m.centroidingErrorRmsePx) < 1.0 && Number(m.lockRetentionRatePct) >= 99 && Number(m.acquisitionTimeSec) <= 0.2 && Number(m.groundTruthFrames) >= N - 2;
+  const ok = errs.length === 0 && parseFloat(m.centroidingErrorRmsePx) < 1.0 && parseFloat(m.lockRetentionRatePct) >= 99 && parseFloat(m.acquisitionTimeSec) <= 0.2 && parseFloat(m.groundTruthFrames) >= N - 2;
   console.log(ok ? 'E2E VIDEO: PASS' : 'E2E VIDEO: FAIL', errs.join(';'));
   process.exit(ok ? 0 : 1);
 })();

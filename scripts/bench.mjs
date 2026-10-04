@@ -6,12 +6,15 @@ import { SCENARIOS } from '../src/engine/config.js';
 const seeds = Number(process.argv[2] ?? 3);
 const duration = Number(process.argv[3] ?? 30);
 const filter = process.argv[4];
+const ACQ = process.env.QREX_ACQ; // overview | zoom | scan
+const ACCEL = process.env.QREX_ACCEL ? { maxAccel: Number(process.env.QREX_ACCEL) } : {};
+const AI = process.env.QREX_AI === '1'; // QREX_AI=1 enables the CNN verifier for an ablation run
 const rows = [];
 for (const sc of SCENARIOS) {
   if (filter && !sc.id.includes(filter)) continue;
   const res = [];
   for (let s = 1; s <= seeds; s++) {
-    const sim = new Simulation({ ...sc.cfg, seed: s, duration });
+    const sim = new Simulation({ ...sc.cfg, seed: s, duration, aiVerifier: AI, ...(ACQ ? { acquisition: ACQ } : {}), ...ACCEL });
     const w0 = performance.now();
     sim.run(duration);
     const m = computeMetrics(sim.records, sim.cfg, (performance.now() - w0) / 1000);
@@ -21,6 +24,6 @@ for (const sc of SCENARIOS) {
   const mx = (k) => Math.max(...res.map((m) => m[k] ?? 0));
   const passes = res.filter((m) => m.passAll).length;
   const chk = Object.keys(res[0].checks).map((k) => `${res.filter((m) => m.checks[k]).length}`).join('/');
-  rows.push([sc.label.padEnd(30), `acq ${avg('acquisitionTimeSec').toFixed(2)}(${mx('acquisitionTimeSec').toFixed(2)})`, `err ${avg('trackingErrorMeanPx').toFixed(1)}`, `rmse ${avg('trackingErrorRmsePx').toFixed(1)}`, `cent ${avg('centroidingErrorRmsePx').toFixed(2)}`, `loss ${avg('targetLossPct').toFixed(1)}%`, `lock ${avg('lockRetentionRatePct').toFixed(1)}%`, `reacq ${mx('reacquisitionTimeMaxSec').toFixed(2)}`, `ms ${avg('processingTimeMeanMs').toFixed(1)}`, `sat ${avg('gimbalSaturationPct').toFixed(0)}%`, `pass ${passes}/${seeds} [${chk}]`].join(' | '));
+  rows.push([sc.label.padEnd(30), `acq ${avg('acquisitionTimeSec').toFixed(2)}(${mx('acquisitionTimeSec').toFixed(2)})`, `narrowCentred ${avg('timeToNarrowFovCentredSec').toFixed(2)}(${mx('timeToNarrowFovCentredSec').toFixed(2)})`, `err ${avg('trackingErrorMeanPx').toFixed(1)}`, `rmse ${avg('trackingErrorRmsePx').toFixed(1)}`, `cent ${avg('centroidingErrorRmsePx').toFixed(2)}`, `loss ${avg('targetLossPct').toFixed(1)}%`, `lock ${avg('lockRetentionRatePct').toFixed(1)}%`, `reacq ${mx('reacquisitionTimeMaxSec').toFixed(2)}`, `ms ${avg('processingTimeMeanMs').toFixed(1)}`, `sat ${avg('gimbalSaturationPct').toFixed(0)}%`, `pass ${passes}/${seeds} [${chk}]`].join(' | '));
   console.log(rows[rows.length - 1]);
 }

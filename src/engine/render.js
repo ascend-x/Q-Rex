@@ -105,7 +105,7 @@ export class SensorModel {
   }
 
   /** screen px per camera px at the current FOV (1 at the default 4 deg). */
-  get scale() { return camScale(this.cfg); }
+  get scale() { return camScale({ fovX: this.fovNow ?? this.cfg.fovX, camW: this.cfg.camW }); }
 
   psfSigma(turbulence) {
     return Math.sqrt(0.5 * 0.5 + this.atm.blur ** 2 + (1.2 * turbulence) ** 2);

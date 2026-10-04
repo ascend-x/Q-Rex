@@ -3,18 +3,20 @@
 // Operates on any single-channel Float32 image, so the same code serves the synthetic camera,
 // the wide overview frame and decoded .mp4 frames (Benchmark-2).
 
+// Median of 9 via the classic 19-exchange sorting network (Devillard's opt_med9). Verified against a brute-force sort in tests.
+const P9 = new Float32Array(9);
 function med9(a, b, c, d, e, f, g, h, i) {
+  const p = P9;
+  p[0] = a; p[1] = b; p[2] = c; p[3] = d; p[4] = e; p[5] = f; p[6] = g; p[7] = h; p[8] = i;
   let t;
-  if (a > b) { t = a; a = b; b = t; } if (d > e) { t = d; d = e; e = t; } if (g > h) { t = g; g = h; h = t; }
-  if (b > c) { t = b; b = c; c = t; } if (e > f) { t = e; e = f; f = t; } if (h > i) { t = h; h = i; i = t; }
-  if (a > b) { t = a; a = b; b = t; } if (d > e) { t = d; d = e; e = t; } if (g > h) { t = g; g = h; h = t; }
-  if (a > d) { t = a; a = d; d = t; } if (d > g) { t = d; d = g; g = t; } if (a > d) { t = a; a = d; d = t; }
-  if (b > e) { t = b; b = e; e = t; } if (e > h) { t = e; e = h; h = t; } if (b > e) { t = b; b = e; e = t; }
-  if (c > f) { t = c; c = f; f = t; } if (f > i) { t = f; f = i; i = t; } if (c > f) { t = c; c = f; f = t; }
-  if (b > d) d = b; if (f > h) f = h; if (d > f) { t = d; d = f; f = t; }
-  if (e > d) { t = e; e = d; d = t; } if (d > f) d = f;
-  if (e > f) { t = e; e = f; f = t; }
-  return e > d ? (d < f ? (e < f ? e : f) : d) : e < f ? (d < f ? d : f) : e;
+  if (p[1] > p[2]) { t = p[1]; p[1] = p[2]; p[2] = t; } if (p[4] > p[5]) { t = p[4]; p[4] = p[5]; p[5] = t; } if (p[7] > p[8]) { t = p[7]; p[7] = p[8]; p[8] = t; }
+  if (p[0] > p[1]) { t = p[0]; p[0] = p[1]; p[1] = t; } if (p[3] > p[4]) { t = p[3]; p[3] = p[4]; p[4] = t; } if (p[6] > p[7]) { t = p[6]; p[6] = p[7]; p[7] = t; }
+  if (p[1] > p[2]) { t = p[1]; p[1] = p[2]; p[2] = t; } if (p[4] > p[5]) { t = p[4]; p[4] = p[5]; p[5] = t; } if (p[7] > p[8]) { t = p[7]; p[7] = p[8]; p[8] = t; }
+  if (p[0] > p[3]) { t = p[0]; p[0] = p[3]; p[3] = t; } if (p[5] > p[8]) { t = p[5]; p[5] = p[8]; p[8] = t; } if (p[4] > p[7]) { t = p[4]; p[4] = p[7]; p[7] = t; }
+  if (p[3] > p[6]) { t = p[3]; p[3] = p[6]; p[6] = t; } if (p[1] > p[4]) { t = p[1]; p[1] = p[4]; p[4] = t; } if (p[2] > p[5]) { t = p[2]; p[2] = p[5]; p[5] = t; }
+  if (p[4] > p[7]) { t = p[4]; p[4] = p[7]; p[7] = t; } if (p[4] > p[2]) { t = p[4]; p[4] = p[2]; p[2] = t; } if (p[6] > p[4]) { t = p[6]; p[6] = p[4]; p[4] = t; }
+  if (p[4] > p[2]) { t = p[4]; p[4] = p[2]; p[2] = t; }
+  return p[4];
 }
 
 /** 3x3 median filter (borders use replicated pixels so edge impulses are removed too). */
@@ -34,6 +36,28 @@ export function median3x3(src, w, h, dst) {
   }
 }
 
+/**
+ * Switching median for dense salt & pepper noise: only pixels sitting at the extreme values (0 / 255) are replaced, by the median of
+ * the non-extreme pixels in their 5x5 neighbourhood. Unlike a plain 3x3 median this keeps 1-3 px blobs (a zoomed-out beacon) intact.
+ */
+export function switchingMedian(src, w, h, dst) {
+  dst.set(src.subarray(0, w * h));
+  const vals = new Float32Array(49);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const v = src[y * w + x];
+      if (v > 0.5 && v < 254.5) continue;
+      let r = 2, n = 0;
+      for (; r <= 3 && n < 5; r++) {
+        n = 0;
+        const ya = Math.max(0, y - r), yb = Math.min(h - 1, y + r), xa = Math.max(0, x - r), xb = Math.min(w - 1, x + r);
+        for (let yy = ya; yy <= yb; yy++) for (let xx = xa; xx <= xb; xx++) { const u = src[yy * w + xx]; if (u > 0.5 && u < 254.5) vals[n++] = u; }
+      }
+      if (n >= 5) { const a = vals.subarray(0, n).sort(); dst[y * w + x] = a[n >> 1]; }
+    }
+  }
+}
+
 function robustStats(arr) {
   arr.sort();
   const n = arr.length;
@@ -46,6 +70,7 @@ function robustStats(arr) {
 
 export class Detector {
   constructor() {
+    this.last = null;
     this.buf = new Float32Array(0);
     this.med = new Float32Array(0);
     this.roi = new Float32Array(0);
@@ -68,6 +93,7 @@ export class Detector {
     const sub = this._ensure('roi', rw * rh);
     for (let y = 0; y < rh; y++) sub.set(img.subarray((y0 + y) * w + x0, (y0 + y) * w + x0 + rw), y * rw);
     const r = this.detect(sub, rw, rh, opts);
+    this.last.ox = x0; this.last.oy = y0;
     for (const c of r.cands) { c.x += x0; c.y += y0; }
     return r;
   }
@@ -90,7 +116,12 @@ export class Detector {
       impulse = n > 0 && salt / n > 0.003;
       this.saltFrac = n > 0 ? salt / n : 0;
     }
-    if (impulse && w > 2 && h > 2) {
+    if (impulse && opts.impulseFilter === 'switching' && w > 6 && h > 6) {
+      const m = this._ensure('med', w * h);
+      switchingMedian(img, w, h, m);
+      src = m;
+      threshold += 2;
+    } else if (impulse && w > 2 && h > 2) {
       const m = this._ensure('med', w * h);
       median3x3(img, w, h, m);
       src = m;
@@ -106,6 +137,8 @@ export class Detector {
     const samp = [];
     for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) samp.push(src[y * w + x]);
     const px = robustStats(Float32Array.from(samp));
+    // expose the preprocessed (impulse-filtered) image + noise statistics: the learned verifier reads patches from it
+    this.last = { src, w, h, bg: px.med, sigma: px.sigma, impulse, ox: 0, oy: 0 };
 
     // 2) integral image
     const W1 = w + 1;

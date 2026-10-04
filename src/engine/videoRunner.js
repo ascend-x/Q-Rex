@@ -21,12 +21,12 @@ export async function loadVideo(file) {
  * Runs the tracker over every frame. onFrame(rowObj, canvas) lets the UI draw progress.
  * Returns {rows, metrics}. The `cancel` object lets the caller abort ({stop:true}).
  */
-export async function runVideo(video, { fps = 30, threshold = 6, gt = null, onFrame, cancel = {} } = {}) {
+export async function runVideo(video, { fps = 30, threshold = 6, gt = null, ai = false, gtConvention = 'index', onFrame, cancel = {} } = {}) {
   const w = video.videoWidth, h = video.videoHeight;
   const cv = document.createElement('canvas');
   cv.width = w; cv.height = h;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
-  const tracker = new VideoTracker({ threshold, fps });
+  const tracker = new VideoTracker({ threshold, fps, ai });
   const gray = new Float32Array(w * h);
   const total = Math.floor(video.duration * fps);
   const rows = [];
@@ -42,7 +42,7 @@ export async function runVideo(video, { fps = 30, threshold = 6, gt = null, onFr
     rows.push(row);
     if (onFrame && (k % 3 === 0 || k === total - 1)) { onFrame(row, cv, k / total); await new Promise((r2) => setTimeout(r2, 0)); }
   }
-  return { rows, metrics: videoMetrics(rows, { fps, w, h, gt }), width: w, height: h };
+  return { rows, metrics: videoMetrics(rows, { fps, w, h, gt, gtConvention }), width: w, height: h };
 }
 
 export function videoRowsToCSV(rows) {

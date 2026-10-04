@@ -68,18 +68,21 @@ export function ArchDiagram() {
         {/* sensor */}
         <Group x={300} y={120} w={230} h={300} label="Sensor model" />
         <Box x={318} y={150} w={194} h={72} title="Narrow camera" sub={['640×480 mono / colour', 'sub-pixel exact beacon']} fill={CREAM} />
-        <Box x={318} y={236} w={194} h={72} title="Wide overview" sub={['screen ÷ 4 · 500×500', 'search / re-acquire only']} fill={CREAM} />
+        <Box x={318} y={236} w={194} h={72} title="Wide view / zoom" sub={['4× overview sensor, or lens', 'zoom-out · search only']} fill={CREAM} />
         <Box x={318} y={322} w={194} h={72} title="Noise chain" sub={['Poisson → Gaussian', '→ salt & pepper → clip']} fill={CREAM} />
         <Arrow d="M226 186 H314" />
         <Arrow d="M226 272 H314" />
         <Arrow d="M226 358 H314" />
 
         {/* tracker */}
-        <Group x={590} y={120} w={600} h={190} label="Coarse tracker" right note="sees only pixels + encoder angle — never ground truth" fill="rgba(13,27,42,.06)" />
+        <Group x={590} y={120} w={600} h={250} label="Coarse tracker" right note="sees only pixels + encoder angle — never ground truth" fill="rgba(13,27,42,.06)" />
         <Box x={606} y={160} w={114} h={106} title="Detector" sub={['median filter', 'matched filter', 'CFAR · centroid']} fill={NAVY} color="#fff" accent={ORANGE} />
         <Box x={752} y={160} w={114} h={106} title="IMM Kalman" sub={['CV + CA models', 'noise learned', 'gating']} fill={NAVY} color="#fff" accent={ORANGE} />
         <Box x={898} y={160} w={114} h={106} title="States" sub={['SEARCH · SLEW', 'TRACK · COAST', 'REACQUIRE']} fill={NAVY} color="#fff" accent={ORANGE} />
         <Box x={1044} y={160} w={114} h={106} title="Control" sub={['feed-forward', '+ feedback', 'stop profile']} fill={NAVY} color="#fff" accent={ORANGE} />
+        <Box x={606} y={290} w={260} h={56} title="CNN verifier · optional" sub="37 k params · rejects false alarms" fill="#fff3eb" accent={ORANGE} />
+        <Arrow d="M650 270 V286" label="" />
+        <Arrow d="M815 286 V270" color={ORANGE} />
         <Arrow d="M724 213 H748" color={ORANGE} />
         <Arrow d="M870 213 H894" color={ORANGE} />
         <Arrow d="M1016 213 H1040" color={ORANGE} />
@@ -91,8 +94,8 @@ export function ArchDiagram() {
 
         {/* gimbal */}
         <Box x={880} y={405} w={290} h={78} title="Pan-tilt mount (virtual gimbal)" sub={['5–10 °/s rate limit · acceleration limit', 'optional command latency']} fill={ORANGE} color="#fff" />
-        <Arrow d="M1101 270 V401" label="velocity command" lx={1101} ly={338} />
-        <Arrow d="M955 401 V270" label="encoder angle" lx={955} ly={338} dashed color="#6b7280" />
+        <Arrow d="M1101 270 V401" label="velocity command" lx={1101} ly={380} />
+        <Arrow d="M955 401 V270" label="encoder angle" lx={955} ly={380} dashed color="#6b7280" />
         {/* gimbal -> sensor loop */}
         <Arrow d="M876 444 H415 V426" label="camera pointing → next exposure" lx={645} ly={444} />
 

@@ -32,7 +32,12 @@ function modelMatrices(kind, dt, q) {
 
 export class IMM {
   /** qCV: accel noise PSD (px^2/s^3) for CV model; qCA: jerk noise PSD for CA model. */
-  constructor({ qCV = 4e4, qCA = 4e6, switchProb = 0.04 } = {}) {
+  constructor({ qCV = 2e4, qCA = 5e7, switchProb = 0.04, adapt = true, qScale0 = 0.1, qFloor = 0.02, qMax = 1, noisePrior = 4 } = {}) {
+    this.noisePrior = noisePrior;
+    this.adapt = adapt;
+    this.qScale0 = qScale0;
+    this.qFloor = qFloor;
+    this.qMax = qMax;
     this.qCV = qCV;
     this.qCA = qCA;
     this.pi = [[1 - switchProb, switchProb], [switchProb, 1 - switchProb]];
@@ -40,7 +45,7 @@ export class IMM {
     this.nisAvg = 1;
     this.rScale = 1;
     this.rHat = 0;
-    this.qScale = 0.1;
+    this.qScale = this.qScale0;
     this.hist = [];
     this.sd = [];
     this.frame = 0;
@@ -55,7 +60,7 @@ export class IMM {
     this.nisAvg = 1;
     this.rScale = 1;
     this.rHat = 0;
-    this.qScale = 0.1;
+    this.qScale = this.qScale0;
     this.hist = [];
     this.sd = [];
     this.frame = 0;
@@ -152,7 +157,10 @@ export class IMM {
    */
   update(zx, zy, sigma, { gate = 16 } = {}) {
     // measurement noise: detector-derived floor, raised by innovation-based estimate (jitter, turbulence)
-    const r0 = Math.max((sigma * this.rScale) ** 2, this.rHat);
+    // until the noise level has been observed (12 second-difference samples) assume a moderate prior so that a filter
+    // started directly on the narrow camera (scan / zoom acquisition) is not over-confident under jitter
+    const prior = this.sd.length < 12 ? this.noisePrior ** 2 : 0;
+    const r0 = Math.max((sigma * this.rScale) ** 2, this.rHat, prior);
     const s = this.state;
     // gating on the combined predicted state
     let d2 = 0;
@@ -160,7 +168,8 @@ export class IMM {
     const zz = [zx, zy];
     const Sc = s.sp * s.sp + r0;
     for (let a = 0; a < 2; a++) d2 += (zz[a] - comb[a]) ** 2 / Sc;
-    if (d2 > gate) { this.missed++; return { accepted: false, nis: d2 / 2 }; }
+    // two rejections in a row mean the model, not the measurement, is wrong: accept (with a Huber-inflated R) instead of coasting forever
+    if (d2 > gate && this.missed < 2) { this.missed++; return { accepted: false, nis: d2 / 2 }; }
     this._noteMeasurement(zx, zy);
     // Huber-style inflation of R for mildly large innovations
     const dz = Math.sqrt(d2 / 2);
@@ -200,9 +209,10 @@ export class IMM {
     const nis = d2 / 2;
     this.nisAvg = 0.8 * this.nisAvg + 0.2 * Math.min(nis, 9);
     this.bigRun = nis > 4.5 ? (this.bigRun || 0) + 1 : 0; // two consecutive 1 % events are not noise
-    if (this.bigRun >= 2) this.qScale = Math.min(1, this.qScale * 1.8); // sudden manoeuvre
-    else if (this.nisAvg > 1.4) this.qScale = Math.min(1, this.qScale * 1.2);
-    else if (this.nisAvg < 0.8) this.qScale = Math.max(0.02, this.qScale * 0.97);
+    if (!this.adapt) { /* fixed process noise */ }
+    else if (this.bigRun >= 2) this.qScale = Math.min(this.qMax, this.qScale * 1.8); // sudden manoeuvre
+    else if (this.nisAvg > 1.4) this.qScale = Math.min(this.qMax, this.qScale * 1.2);
+    else if (this.nisAvg < 0.8) this.qScale = Math.max(this.qFloor, this.qScale * 0.97);
     this.missed = 0;
     return { accepted: true, nis };
   }

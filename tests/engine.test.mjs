@@ -127,3 +127,32 @@ test('DEFAULTS expose the spec defaults', () => {
   assert.equal(DEFAULTS.camW, 640); assert.equal(DEFAULTS.camH, 480); assert.equal(DEFAULTS.fovX, 4);
   assert.equal(DEFAULTS.maxPanSpeed, 5); assert.equal(DEFAULTS.targetSize, 10); assert.equal(DEFAULTS.screenSize, 2000);
 });
+
+test('switching median keeps small blobs that a 3x3 median erases, and removes impulses', async () => {
+  const { switchingMedian, median3x3 } = await import('../src/engine/detector.js');
+  const w = 40, h = 40, src = new Float32Array(w * h).fill(20);
+  const rng = new RNG(3, 3);
+  for (let i = 0; i < src.length; i++) { const u = rng.next(); if (u < 0.05) src[i] = 0; else if (u > 0.95) src[i] = 255; }
+  for (let y = 19; y <= 20; y++) for (let x = 19; x <= 20; x++) src[y * w + x] = 200; // 2x2 beacon
+  const a = new Float32Array(w * h), b = new Float32Array(w * h);
+  switchingMedian(src, w, h, a); median3x3(src, w, h, b);
+  const mean = (arr) => (arr[19 * w + 19] + arr[19 * w + 20] + arr[20 * w + 19] + arr[20 * w + 20]) / 4;
+  assert.ok(mean(a) > 150, 'switching median keeps the blob: ' + mean(a));
+  assert.ok(mean(b) < 120, 'plain median erodes it: ' + mean(b));
+  let ext = 0; for (let i = 0; i < a.length; i++) if (a[i] <= 0.5 || a[i] >= 254.5) ext++;
+  assert.ok(ext === 0, 'impulses removed: ' + ext);
+});
+
+test('median3x3 equals a brute-force sort median on random data (regression: the sorting network was once wrong)', async () => {
+  const { median3x3 } = await import('../src/engine/detector.js');
+  const w = 12, h = 12, src = new Float32Array(w * h), dst = new Float32Array(w * h), rng = new RNG(77, 4);
+  for (let t = 0; t < 200; t++) {
+    for (let i = 0; i < src.length; i++) src[i] = Math.floor(rng.next() * 7);
+    median3x3(src, w, h, dst);
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const v = []; for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) v.push(src[(y + j) * w + x + i]);
+      v.sort((a, b) => a - b);
+      assert.equal(dst[y * w + x], v[4]);
+    }
+  }
+});
