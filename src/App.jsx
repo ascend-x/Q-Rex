@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Simulation } from './engine/simulation.js'
-import { camScale, DEFAULTS, SCENARIOS, clampConfig } from './engine/config.js'
+import { camScale, DEFAULTS, SCENARIOS, MOTIONS, ATMOSPHERES, clampConfig } from './engine/config.js'
+import Logo from './Logo.jsx'
 import { computeMetrics, recordsToCSV, metricsToHTML } from './engine/metrics.js'
 import { loadVideo, runVideo, videoRowsToCSV } from './engine/videoRunner.js'
 import { parseGroundTruth } from './engine/videoTracker.js'
@@ -18,6 +19,28 @@ function download(name, text, mime = 'text/plain') {
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 2000)
+}
+
+/** Size a canvas' backing store to its CSS box x devicePixelRatio and return a ctx drawing in CSS pixels. */
+function fitCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1
+  const W = canvas.clientWidth, H = canvas.clientHeight
+  if (!W || !H) return null
+  const bw = Math.round(W * dpr), bh = Math.round(H * dpr)
+  if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh }
+  const ctx = canvas.getContext('2d')
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  return { ctx, W, H }
+}
+
+function FilePick({ inputRef, accept, label, name, onPick }) {
+  return (
+    <label className="filepick">
+      <input type="file" accept={accept} ref={inputRef} onChange={(e) => onPick(e.target.files?.[0]?.name || '')} />
+      <span className="filebtn">{label}</span>
+      <em title={name}>{name || 'no file chosen'}</em>
+    </label>
+  )
 }
 
 function Field({ f, cfg, onChange }) {
@@ -84,6 +107,8 @@ export default function App() {
   const gtFile = useRef(null)
   const videoCanvas = useRef(null)
   const [videoFps, setVideoFps] = useState(30)
+  const [videoName, setVideoName] = useState('')
+  const [gtName, setGtName] = useState('')
   const cancelRef = useRef({ stop: false })
 
   runRef.current.running = running
@@ -152,13 +177,20 @@ export default function App() {
 
     // minimap
     const mc = mapRef.current
-    if (mc) {
-      const m = mc.getContext('2d'), S = mc.width / sim.cfg.screenSize
-      m.fillStyle = '#0b1020'; m.fillRect(0, 0, mc.width, mc.height)
-      m.strokeStyle = 'rgba(255,255,255,.08)'
-      for (let g = 500; g < sim.cfg.screenSize; g += 500) { m.beginPath(); m.moveTo(g * S, 0); m.lineTo(g * S, mc.height); m.moveTo(0, g * S); m.lineTo(mc.width, g * S); m.stroke() }
+    const mf = mc && fitCanvas(mc)
+    if (mf) {
+      const m = mf.ctx
+      const side = Math.min(mf.W, mf.H) - 2, S = side / sim.cfg.screenSize
+      m.fillStyle = '#05080f'; m.fillRect(0, 0, mf.W, mf.H)
+      m.save(); m.translate(Math.round((mf.W - side) / 2), Math.round((mf.H - side) / 2))
+      m.fillStyle = '#0b1020'; m.fillRect(0, 0, side, side)
+      m.strokeStyle = 'rgba(255,255,255,.09)'; m.lineWidth = 1
+      for (let g = 500; g < sim.cfg.screenSize; g += 500) { m.beginPath(); m.moveTo(g * S, 0); m.lineTo(g * S, side); m.moveTo(0, g * S); m.lineTo(side, g * S); m.stroke() }
+      m.strokeStyle = 'rgba(255,255,255,.35)'; m.strokeRect(0.5, 0.5, side - 1, side - 1)
+      m.fillStyle = 'rgba(255,255,255,.45)'; m.font = '10px ui-monospace, monospace'
+      m.fillText('0', 4, 12); m.fillText(String(sim.cfg.screenSize) + ' px', side - 48, side - 5)
       const recs = sim.records, n0 = Math.max(0, recs.length - 150)
-      m.strokeStyle = 'rgba(255,77,224,.5)'; m.beginPath()
+      m.strokeStyle = 'rgba(255,77,224,.55)'; m.beginPath()
       for (let i = n0; i < recs.length; i++) { const x = recs[i].worldX * S, y = recs[i].worldY * S; if (i === n0) m.moveTo(x, y); else m.lineTo(x, y) }
       m.stroke()
       const sc = camScale(sim.cfg)
@@ -168,21 +200,67 @@ export default function App() {
       m.lineWidth = 1
       sim.last.tgts.forEach((t, i) => { m.fillStyle = i === 0 ? '#ff4de0' : '#9ca3af'; m.beginPath(); m.arc(t.x * S, t.y * S, i === 0 ? 4 : 3, 0, 6.3); m.fill() })
       if (out.estWorld) { m.strokeStyle = '#22ff88'; m.beginPath(); m.arc((out.estWorld.x + sim.last.view.cx - sim.last.cam.x) * S, (out.estWorld.y + sim.last.view.cy - sim.last.cam.y) * S, 8, 0, 6.3); m.stroke() }
+      m.restore()
     }
-    // error plot
+    // live error plot
     const pc = plotRef.current
-    if (pc) {
-      const p = pc.getContext('2d'), W = pc.width, H = pc.height
+    const pf = pc && fitCanvas(pc)
+    if (pf) {
+      const p = pf.ctx, W = pf.W, H = pf.H
+      const L = 38, R = 12, T = 30, B = 32, N = 300
+      const pw = W - L - R, ph = H - T - B
+      const recs = sim.records, n0 = Math.max(0, recs.length - N), n = recs.length - n0
+      // the line starts once the beacon has first been centred (<= 10 px); the slew-in transient is shown by the state strip
+      if (sim._settled === undefined || sim._settled > recs.length) sim._settled = -1
+      for (let i = Math.max(0, sim._settledScan || 0); sim._settled < 0 && i < recs.length; i++) { sim._settledScan = i + 1; if (recs[i].state === 'TRACK' && recs[i].errTrack <= 10) sim._settled = i }
+      const locked = (r) => (r.state === 'TRACK' || r.state === 'COAST') && sim._settled >= 0 && r.k >= sim._settled
+      let peak = 0
+      for (let i = n0; i < recs.length; i++) if (locked(recs[i]) && recs[i].errTrack > peak) peak = recs[i].errTrack
+      const YM = peak * 1.15 <= 15 ? 15 : peak * 1.15 <= 20 ? 20 : 40
+      const STEP = YM <= 15 ? 5 : YM <= 20 ? 5 : 10
+      const xx = (i) => L + (i / (N - 1)) * pw
+      const yy = (e) => T + ph - (Math.min(e, YM) / YM) * ph
       p.fillStyle = '#fff'; p.fillRect(0, 0, W, H)
-      const recs = sim.records, N = 300, n0 = Math.max(0, recs.length - N), YM = 40
-      const yy = (e) => H - 18 - Math.min(e, YM) / YM * (H - 28)
-      p.strokeStyle = '#dc2626'; p.setLineDash([5, 4]); p.beginPath(); p.moveTo(0, yy(10)); p.lineTo(W, yy(10)); p.stroke(); p.setLineDash([])
-      p.fillStyle = '#dc2626'; p.font = '10px monospace'; p.fillText('10 px spec', 4, yy(10) - 3)
-      for (let i = n0; i < recs.length; i++) { p.fillStyle = STATE_COLOR[recs[i].state] || '#999'; p.fillRect(((i - n0) / N) * W, H - 12, W / N + 1, 12) }
-      p.strokeStyle = '#111'; p.lineWidth = 1.5; p.beginPath()
-      for (let i = n0; i < recs.length; i++) { const x = ((i - n0) / N) * W, y = yy(recs[i].errTrack); if (i === n0) p.moveTo(x, y); else p.lineTo(x, y) }
-      p.stroke(); p.lineWidth = 1
-      p.fillStyle = '#555'; p.fillText('boresight error (px), clipped at 40', 4, 11)
+      // grid + y labels
+      p.font = '10px ui-monospace, monospace'; p.textBaseline = 'middle'; p.textAlign = 'right'
+      for (let v = 0; v <= YM; v += STEP) {
+        p.strokeStyle = v === 0 ? '#9ca3af' : '#e5e7eb'; p.lineWidth = 1
+        p.beginPath(); p.moveTo(L, Math.round(yy(v)) + 0.5); p.lineTo(L + pw, Math.round(yy(v)) + 0.5); p.stroke()
+        p.fillStyle = '#6b7280'; p.fillText(String(v), L - 6, yy(v))
+      }
+      // spec band (0..10 px) and line
+      p.fillStyle = 'rgba(5,150,105,.08)'; p.fillRect(L, yy(10), pw, yy(0) - yy(10))
+      p.strokeStyle = '#dc2626'; p.setLineDash([6, 4]); p.lineWidth = 1.2
+      p.beginPath(); p.moveTo(L, yy(10)); p.lineTo(L + pw, yy(10)); p.stroke(); p.setLineDash([])
+      p.fillStyle = '#dc2626'; p.textAlign = 'right'; p.textBaseline = 'bottom'; p.fillText('10 px spec', L + pw - 4, yy(10) - 3)
+      if (n > 1) {
+        // error line only while the beacon is tracked (acquisition slew is shown by the state strip, not as "error")
+        let nT = 0, sum = 0, lastV = null
+        let open = false
+        p.lineWidth = 1.8; p.lineJoin = 'round'
+        for (let i = 0; i < n; i++) {
+          const r = recs[n0 + i]
+          if (!locked(r)) { if (open) { p.strokeStyle = '#ea4c00'; p.stroke(); open = false } continue }
+          const x = xx(i), y = yy(r.errTrack)
+          if (!open) { p.beginPath(); p.moveTo(x, y); open = true } else p.lineTo(x, y)
+          nT++; sum += r.errTrack; lastV = { x, y, e: r.errTrack }
+        }
+        if (open) { p.strokeStyle = '#ea4c00'; p.stroke() }
+        if (lastV) { p.fillStyle = '#ea4c00'; p.beginPath(); p.arc(lastV.x, lastV.y, 3.5, 0, 6.3); p.fill() }
+        p.textAlign = 'right'; p.textBaseline = 'middle'; p.font = '600 12px ui-monospace, monospace'
+        if (lastV) {
+          p.fillStyle = lastV.e <= 10 ? '#047857' : '#b91c1c'
+          p.fillText(`now ${lastV.e.toFixed(1)} px`, W - R, 12)
+          p.fillStyle = '#374151'; p.fillText(`mean ${(sum / nT).toFixed(1)} px (locked)`, W - R - 106, 12)
+        } else { p.fillStyle = '#6b7280'; p.fillText('acquiring…', W - R, 12) }
+        // state strip
+        for (let i = 0; i < n; i++) { p.fillStyle = STATE_COLOR[recs[n0 + i].state] || '#999'; p.fillRect(xx(i), H - B + 8, pw / (N - 1) + 0.6, 7) }
+      }
+      p.textAlign = 'left'; p.textBaseline = 'middle'; p.font = '700 11px ui-monospace, monospace'; p.fillStyle = '#111'
+      p.fillText('BORESIGHT ERROR (px)', L, 12)
+      p.font = '10px ui-monospace, monospace'; p.fillStyle = '#6b7280'
+      p.textAlign = 'left'; p.fillText(`−${(N / sim.cfg.fps).toFixed(0)} s`, L, H - 4)
+      p.textAlign = 'right'; p.fillText('now', L + pw, H - 4)
     }
   }, [])
 
@@ -220,7 +298,12 @@ export default function App() {
       const sim = simRef.current
       if (!sim || !sim.records.length) return
       setStats(computeMetrics(sim.records, sim.cfg, sim.wallTotal / 1000))
-      setLive({ state: sim.last.out.state, t: sim.last.rec.t, err: sim.last.rec.errTrack, ms: sim.last.rec.procMs })
+      const o = sim.last.out, kf = sim.tracker.kf
+      setLive({
+        state: o.state, t: sim.last.rec.t, err: sim.last.rec.errTrack, ms: sim.last.rec.procMs, frame: sim.k,
+        sat: sim.last.rec.saturated, overview: o.overview, mu: o.mu, v: o.estWorld ? Math.hypot(o.estWorld.vx, o.estWorld.vy) : null,
+        sp: o.estWorld ? o.estWorld.sp : null, roi: o.roi ? o.roi.r : null, cam: sim.last.cam, qScale: kf.initialised ? kf.qScale : null, rHat: kf.initialised ? Math.sqrt(kf.rHat) : null,
+      })
     }, 250)
     return () => clearInterval(id)
   }, [])
@@ -282,6 +365,23 @@ export default function App() {
     }
   }
 
+  const chips = useMemo(() => {
+    const c = []
+    c.push(MOTIONS.find((m) => m.id === cfg.motion)?.label ?? cfg.motion)
+    c.push(`${cfg.targetSize}px ${cfg.targetShape}`)
+    if (cfg.numTargets > 1) c.push(`${cfg.numTargets - 1} decoy${cfg.numTargets > 2 ? 's' : ''}`)
+    if (cfg.saltPepper) c.push(`salt&pepper ${Math.round(cfg.saltPepperDensity * 100)}%`)
+    if (cfg.gaussian) c.push(`gaussian σ${cfg.gaussianSigma}`)
+    if (cfg.poisson) c.push('poisson')
+    if (cfg.jitter) c.push(`jitter ±${cfg.jitterMax}px`)
+    if (cfg.platform) c.push(`platform ${cfg.platformSpeed}px/f ${cfg.platformModel}`)
+    if (cfg.atmosphere !== 'clear') c.push(ATMOSPHERES[cfg.atmosphere]?.label ?? cfg.atmosphere)
+    if (cfg.turbulence > 0) c.push(`turbulence ${cfg.turbulence}`)
+    if (cfg.dropout) c.push('dropouts')
+    c.push(`seed ${cfg.seed}`)
+    return c
+  }, [cfg])
+
   const scenarioTable = useMemo(() => batch.rows, [batch.rows])
   const c = stats?.checks
   const slewPx = Math.min(cfg.maxPanSpeed, cfg.maxTiltSpeed) * 160
@@ -291,16 +391,9 @@ export default function App() {
   return (
     <div className="layout">
       <aside className="sidebar panel">
-        <div className="brand"><h1>Q-Rex</h1><p>FSOC coarse-alignment virtual camera tracker</p></div>
-        <div className="btnrow">
-          <button className="btn primary" onClick={() => setRunning((r) => !r)}>{running ? 'Pause' : 'Run'}</button>
-          <button className="btn" onClick={() => { restart(cfg); setRunning(true) }}>Restart</button>
-        </div>
-        <div className="field">
-          <label>Sim speed <b>{speed >= 50 ? 'max' : `${speed}×`}</b></label>
-          <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
-            <option value={0.25}>0.25×</option><option value={0.5}>0.5×</option><option value={1}>1× (real time)</option><option value={2}>2×</option><option value={4}>4×</option><option value={100}>max</option>
-          </select>
+        <div className="brand">
+          <div className="brandrow"><Logo size={46} /><div><h1>Q-Rex</h1><p>Workstation · FSOC coarse alignment</p></div></div>
+          <a className="homelink" href="#/">← Home / overview</a>
         </div>
         <label className="check"><input type="checkbox" checked={showTruth} onChange={(e) => setShowTruth(e.target.checked)} /> Show ground truth overlay</label>
         <label className="check"><input type="checkbox" checked={autoSave} onChange={(e) => setAutoSave(e.target.checked)} /> Auto-save report at end of run</label>
@@ -318,14 +411,27 @@ export default function App() {
           </details>
         ))}
         {!feasible && <div className="warn">Target + platform speed ({Math.round(worstRel)} px/s) exceeds the gimbal limit ({slewPx} px/s) — saturation expected.</div>}
-        <div className="btnrow" style={{ marginTop: 'auto' }}>
-          <button className="btn" onClick={() => exportAll('json')}>JSON</button>
-          <button className="btn" onClick={() => exportAll('csv')}>CSV log</button>
-          <button className="btn" onClick={() => exportAll('html')}>HTML</button>
-        </div>
       </aside>
 
       <main className="main">
+        <section className="panel toolbar">
+          <div className="tb-left">
+            <span className={`livepill ${running && !done ? 'on' : ''}`}><i />{done ? 'RUN COMPLETE' : running ? 'LIVE' : 'PAUSED'}</span>
+            <div className="chips2">{chips.map((c) => <span key={c}>{c}</span>)}</div>
+          </div>
+          <div className="tb-right">
+            <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} title="Simulation speed">
+              <option value={0.25}>0.25×</option><option value={0.5}>0.5×</option><option value={1}>1× real time</option><option value={2}>2×</option><option value={4}>4×</option><option value={100}>max speed</option>
+            </select>
+            <button className="btn primary" onClick={() => setRunning((r) => !r)}>{running ? '❚❚ Pause' : '▶ Run'}</button>
+            <button className="btn" onClick={() => { restart(cfg); setRunning(true) }}>↻ Restart</button>
+            <span className="tbsep" />
+            <button className="btn" onClick={() => exportAll('json')} title="Performance report (JSON)">JSON</button>
+            <button className="btn" onClick={() => exportAll('csv')} title="Per-frame tracking log">CSV</button>
+            <button className="btn" onClick={() => exportAll('html')} title="Printable report">HTML</button>
+          </div>
+        </section>
+
         <section className="panel statbar">
           <div className="status" style={{ background: STATE_COLOR[live.state] }}>{live.state}{done ? ' · DONE' : ''}</div>
           <Tile label="Acquisition" value={fmt(stats?.acquisitionTimeSec)} unit=" s" ok={c?.K01_acquisition_le_2s} sub="spec ≤ 2 s" />
@@ -336,62 +442,111 @@ export default function App() {
           <Tile label="Tracker FPS" value={fmt(stats?.averageFPS, 0)} unit="" ok={c?.K05_fps_ge_20} sub={`${fmt(stats?.processingTimeMeanMs, 1)} ms / frame`} />
         </section>
 
-        <div className="grid">
+        <div className="grid2">
           <section className="panel view">
             <header>Virtual camera <span>{cfg.camW}×{cfg.camH} {cfg.cameraType === 'colour' ? 'colour' : 'mono'} · {cfg.fovX}°×{(cfg.fovX * cfg.camH / cfg.camW).toFixed(1)}°</span></header>
-            <canvas key={`${cfg.camW}x${cfg.camH}`} ref={camRef} width={cfg.camW} height={cfg.camH} className="cam" style={{ aspectRatio: `${cfg.camW}/${cfg.camH}` }} />
+            <div className="camwrap">
+              <canvas key={`${cfg.camW}x${cfg.camH}`} ref={camRef} width={cfg.camW} height={cfg.camH} className="cam" style={{ aspectRatio: `${cfg.camW}/${cfg.camH}`, maxWidth: cfg.camW }} />
+            </div>
             <div className="legend"><i style={{ background: '#ef4444' }} />boresight <i style={{ background: '#22ff88' }} />detection <i style={{ background: '#fde047' }} />estimate <i style={{ background: '#22d3ee' }} />ROI <i style={{ background: '#ff4de0' }} />truth</div>
           </section>
-          <div className="side">
-            <section className="panel view">
-              <header>Screen map <span>{cfg.screenSize}×{cfg.screenSize} px · {(cfg.screenSize / 160).toFixed(1)}°</span></header>
-              <canvas ref={mapRef} width={320} height={320} className="map" />
-            </section>
-            <section className="panel view">
-              <header>Live error</header>
-              <canvas ref={plotRef} width={320} height={150} className="plot" />
-            </section>
-          </div>
+
+          <section className="panel view">
+            <header>Screen map <span>{cfg.screenSize}×{cfg.screenSize} px · {(cfg.screenSize / 160).toFixed(1)}°</span></header>
+            <div className="camwrap">
+              <canvas ref={mapRef} className="map" style={{ aspectRatio: `${cfg.camW}/${cfg.camH}`, maxWidth: cfg.camW }} />
+            </div>
+            <div className="legend"><i style={{ background: '#38bdf8' }} />camera FOV <i style={{ background: '#ff4de0' }} />beacon + trail <i style={{ background: '#22ff88' }} />estimate</div>
+          </section>
+
+          <section className="panel view">
+            <header>Live error <span className="states">{Object.entries(STATE_COLOR).map(([k, c]) => <b key={k}><i style={{ background: c }} />{k}</b>)}</span></header>
+            <canvas ref={plotRef} className="plot" />
+          </section>
+
+          <section className="panel view">
+            <header>Tracker telemetry <span>t = {(live.t ?? 0).toFixed(2)} s · frame {live.frame ?? 0}</span></header>
+            <dl className="telemetry">
+              <dt>State</dt><dd style={{ color: STATE_COLOR[live.state] }}>{live.state}</dd>
+              <dt>Sensing</dt><dd>{live.overview ? 'wide overview + narrow' : 'narrow camera'}</dd>
+              <dt>Camera pointing</dt><dd>{live.cam ? `${live.cam.x.toFixed(0)}, ${live.cam.y.toFixed(0)} px` : '–'}</dd>
+              <dt>Beacon speed (est.)</dt><dd>{live.v != null ? `${live.v.toFixed(0)} px/s` : '–'}</dd>
+              <dt>Model mix CV / CA</dt><dd>{live.mu ? `${(live.mu[0] * 100).toFixed(0)} % / ${(live.mu[1] * 100).toFixed(0)} %` : '–'}</dd>
+              <dt>Position σ (filter)</dt><dd>{live.sp != null ? `${live.sp.toFixed(1)} px` : '–'}</dd>
+              <dt>Measurement noise (learned)</dt><dd>{live.rHat != null ? `${live.rHat.toFixed(1)} px` : '–'}</dd>
+              <dt>Search window</dt><dd>{live.roi != null ? `±${live.roi.toFixed(0)} px` : '–'}</dd>
+              <dt>Processing</dt><dd>{live.ms != null ? `${live.ms.toFixed(2)} ms` : '–'}</dd>
+              <dt>Gimbal</dt><dd style={{ color: live.sat ? '#b45309' : undefined }}>{live.sat ? 'rate-limited (saturated)' : 'within limits'}</dd>
+            </dl>
+          </section>
         </div>
 
-        <section className="panel pad">
-          <h2>Benchmark 1 — scenario suite</h2>
-          <div className="btnrow wrap">
-            <label>Seconds/run <input type="number" min={5} max={120} value={batchSecs} onChange={(e) => setBatchSecs(Number(e.target.value))} /></label>
-            <label>Seeds <input type="number" min={1} max={10} value={batchSeeds} onChange={(e) => setBatchSeeds(Number(e.target.value))} /></label>
-            <button className="btn primary" disabled={batch.running} onClick={runBatch}>{batch.running ? `Running ${(batch.progress * 100).toFixed(0)}%` : 'Run all scenarios'}</button>
-            {scenarioTable.length > 0 && <button className="btn" onClick={() => download('scenario_suite.json', JSON.stringify(scenarioTable.map(({ metrics, ...r }) => ({ ...r, metrics })), null, 2), 'application/json')}>Export suite JSON</button>}
+        <section className="panel bench">
+          <div className="bench-head"><span className="bnum">B1</span><div><h2>Benchmark 1 — scenario suite</h2><p>Runs every built-in scenario headlessly (nominal, each disturbance at its spec maximum, all combined) and checks the five spec limits.</p></div></div>
+          <div className="bench-body">
+            <div className="bench-controls">
+              <div className="bstep"><i>1</i><div><b>Choose run length</b><div className="brow"><label>Seconds per run <input type="number" min={5} max={120} value={batchSecs} onChange={(e) => setBatchSecs(Number(e.target.value))} /></label><label>Seeds <input type="number" min={1} max={10} value={batchSeeds} onChange={(e) => setBatchSeeds(Number(e.target.value))} /></label></div></div></div>
+              <div className="bstep"><i>2</i><div><b>Run</b>
+                <button className="btn primary wide" disabled={batch.running} onClick={runBatch}>{batch.running ? `Running… ${(batch.progress * 100).toFixed(0)}%` : '▶ Run all scenarios'}</button>
+                {(batch.running || batch.progress > 0) && <div className="progress"><div style={{ width: `${(batch.progress * 100).toFixed(0)}%` }} /></div>}
+              </div></div>
+              {scenarioTable.length > 0 && <div className="bstep"><i>3</i><div><b>Export</b><button className="btn wide" onClick={() => download('scenario_suite.json', JSON.stringify(scenarioTable.map(({ metrics, ...r }) => ({ ...r, metrics })), null, 2), 'application/json')}>Export suite JSON</button></div></div>}
+            </div>
+            <div className="bench-out">
+              {scenarioTable.length === 0 ? (
+                <div className="placeholder"><div><strong>{SCENARIOS.length} scenarios · {batchSeeds} seed{batchSeeds > 1 ? 's' : ''} · {batchSecs} s each</strong><span>Results appear here with a pass/fail check for acquisition, error, loss, re-acquisition and FPS.</span>
+                  <div className="chips2 center">{SCENARIOS.map((sc) => <span key={sc.id}>{sc.label.split(' ')[0]} {sc.label.split(' ').slice(1).join(' ')}</span>)}</div></div></div>
+              ) : (
+                <div className="tblscroll"><table className="tbl"><thead><tr><th>Scenario</th><th>Acq s</th><th>Err px</th><th>Cent RMSE</th><th>Loss %</th><th>Lock %</th><th>Re-acq s</th><th>FPS</th><th>Pass</th></tr></thead>
+                  <tbody>{scenarioTable.map((r) => (
+                    <tr key={r.id}><td>{r.label}</td><td className={r.checks.K01_acquisition_le_2s === r.runs ? 'g' : 'r'}>{r.acq.toFixed(2)}</td><td className={r.checks.K02_tracking_error_le_10px === r.runs ? 'g' : 'r'}>{r.err.toFixed(1)}</td><td>{r.cent.toFixed(2)}</td><td className={r.checks.K03_target_loss_lt_5pct === r.runs ? 'g' : 'r'}>{r.loss.toFixed(1)}</td><td>{r.lock.toFixed(1)}</td><td className={r.checks.K04_reacquisition_le_1s === r.runs ? 'g' : 'r'}>{r.reacq.toFixed(2)}</td><td>{r.fps.toFixed(0)}</td><td className={r.pass === r.runs ? 'g' : 'r'}>{r.pass}/{r.runs}</td></tr>
+                  ))}</tbody></table></div>
+              )}
+            </div>
           </div>
-          {scenarioTable.length > 0 && (
-            <table className="tbl"><thead><tr><th>Scenario</th><th>Acq s</th><th>Err px</th><th>Cent RMSE</th><th>Loss %</th><th>Lock %</th><th>Re-acq s</th><th>FPS</th><th>Pass</th></tr></thead>
-              <tbody>{scenarioTable.map((r) => (
-                <tr key={r.id}><td>{r.label}</td><td className={r.checks.K01_acquisition_le_2s === r.runs ? 'g' : 'r'}>{r.acq.toFixed(2)}</td><td className={r.checks.K02_tracking_error_le_10px === r.runs ? 'g' : 'r'}>{r.err.toFixed(1)}</td><td>{r.cent.toFixed(2)}</td><td className={r.checks.K03_target_loss_lt_5pct === r.runs ? 'g' : 'r'}>{r.loss.toFixed(1)}</td><td>{r.lock.toFixed(1)}</td><td className={r.checks.K04_reacquisition_le_1s === r.runs ? 'g' : 'r'}>{r.reacq.toFixed(2)}</td><td>{r.fps.toFixed(0)}</td><td className={r.pass === r.runs ? 'g' : 'r'}>{r.pass}/{r.runs}</td></tr>
-              ))}</tbody></table>
-          )}
         </section>
 
-        <section className="panel pad">
-          <h2>Benchmark 2 — video input (PTZ bypassed)</h2>
-          <p className="muted">Frame-exact decode of an .mp4 (any size; ≥1000 px frames are treated as the whole screen). Optional ground truth CSV: <code>frame,x,y</code>.</p>
-          <div className="btnrow wrap">
-            <input type="file" accept="video/*" ref={videoFile} />
-            <input type="file" accept=".csv,.txt" ref={gtFile} title="ground truth csv" />
-            <label>fps <input type="number" min={1} max={120} value={videoFps} onChange={(e) => setVideoFps(Number(e.target.value))} /></label>
-            <button className="btn primary" disabled={video.busy} onClick={runVideoBench}>{video.busy ? `Processing ${(video.progress * 100).toFixed(0)}%` : 'Run on video'}</button>
-            {video.busy && <button className="btn" onClick={() => { cancelRef.current.stop = true }}>Stop</button>}
-          </div>
-          {video.error && <div className="warn">{video.error}</div>}
-          <div className="vrow">
-            <canvas ref={videoCanvas} width={480} height={360} className="vcanvas" />
-            {video.result && (
-              <div>
-                <table className="tbl small"><tbody>{Object.entries(video.result.metrics).map(([k, v]) => <tr key={k}><td>{k}</td><td>{String(v ?? 'n/a')}</td></tr>)}</tbody></table>
-                <div className="btnrow">
-                  <button className="btn" onClick={() => download('video_centroids.csv', videoRowsToCSV(video.result.rows), 'text/csv')}>Centroid log CSV</button>
-                  <button className="btn" onClick={() => download('video_report.json', JSON.stringify(video.result.metrics, null, 2), 'application/json')}>Report JSON</button>
-                </div>
-              </div>
-            )}
+        <section className="panel bench">
+          <div className="bench-head"><span className="bnum">B2</span><div><h2>Benchmark 2 — video input <em>PTZ bypassed</em></h2><p>Frame-exact decode of an .mp4 (any size; frames ≥ 1000 px are treated as the whole screen). The tracker finds the beacon in every frame and logs its centroid.</p></div></div>
+          <div className="bench-body">
+            <div className="bench-controls">
+              <div className="bstep"><i>1</i><div><b>Video file</b><FilePick inputRef={videoFile} accept="video/*,.mp4" label="Choose .mp4" name={videoName} onPick={setVideoName} /></div></div>
+              <div className="bstep"><i>2</i><div><b>Ground truth <small>optional</small></b><FilePick inputRef={gtFile} accept=".csv,.txt" label="Choose CSV" name={gtName} onPick={setGtName} /><span className="hint">Lines of <code>frame,x,y</code> — 0-based frame, pixel-index coordinates. Enables centroid-error metrics.</span></div></div>
+              <div className="bstep"><i>3</i><div><b>Run</b>
+                <div className="brow"><label>Video fps <input type="number" min={1} max={120} value={videoFps} onChange={(e) => setVideoFps(Number(e.target.value))} /></label></div>
+                <div className="brow"><button className="btn primary wide" disabled={video.busy} onClick={runVideoBench}>{video.busy ? `Processing… ${(video.progress * 100).toFixed(0)}%` : '▶ Run on video'}</button>{video.busy && <button className="btn" onClick={() => { cancelRef.current.stop = true }}>Stop</button>}</div>
+                {(video.busy || video.progress > 0) && <div className="progress"><div style={{ width: `${(video.progress * 100).toFixed(0)}%` }} /></div>}
+                {video.error && <div className="warn">{video.error}</div>}
+              </div></div>
+            </div>
+            <div className="bench-out">
+              <div className="previewbox" style={{ display: video.busy || video.result ? 'block' : 'none' }}><canvas ref={videoCanvas} width={480} height={360} className="vcanvas" /></div>
+              {!(video.busy || video.result) && (
+                <div className="placeholder tall"><div><strong>No video processed yet</strong><span>Choose an .mp4 on the left and press <b>Run on video</b>. Each frame is shown here with a green box on the detected beacon.</span></div></div>
+              )}
+              {video.result && (() => {
+                const m = video.result.metrics
+                return (
+                  <>
+                    <div className="mgrid">
+                      <div className="mcard"><span>Acquisition</span><b>{m.acquisitionTimeSec ?? '–'}<small> s</small></b></div>
+                      <div className="mcard"><span>Lock retention</span><b>{m.lockRetentionRatePct ?? '–'}<small> %</small></b></div>
+                      <div className="mcard"><span>Centroid RMSE</span><b>{m.centroidingErrorRmsePx ?? 'n/a'}<small>{m.centroidingErrorRmsePx != null ? ' px' : ''}</small></b></div>
+                      <div className="mcard"><span>Tracker FPS</span><b>{m.averageFPS ?? '–'}</b></div>
+                      <div className="mcard"><span>Re-acq. max</span><b>{m.reacquisitionTimeMaxSec ?? '–'}<small> s</small></b></div>
+                      <div className="mcard"><span>Frames</span><b>{m.frames}</b></div>
+                    </div>
+                    <details className="alltable"><summary>All metrics</summary>
+                      <table className="tbl small"><tbody>{Object.entries(m).map(([k, v]) => <tr key={k}><td>{k}</td><td>{String(v ?? 'n/a')}</td></tr>)}</tbody></table>
+                    </details>
+                    <div className="brow">
+                      <button className="btn" onClick={() => download('video_centroids.csv', videoRowsToCSV(video.result.rows), 'text/csv')}>Centroid log CSV</button>
+                      <button className="btn" onClick={() => download('video_report.json', JSON.stringify(video.result.metrics, null, 2), 'application/json')}>Report JSON</button>
+                    </div>
+                  </>
+                )
+              })()}
+            </div>
           </div>
         </section>
       </main>

@@ -33,13 +33,13 @@ async function makeVideo() {
   const p = await b.newPage();
   const errs = [];
   p.on('pageerror', (e) => errs.push(e.message));
-  await p.goto(process.argv[2] || 'file://' + path.resolve(__dirname, '../dist-single/q-rex.html'), { waitUntil: 'load' });
+  await p.goto(process.argv[2] || 'file://' + path.resolve(__dirname, '../dist-single/q-rex.html') + '#/app', { waitUntil: 'load' });
   const inputs = await p.$$('input[type=file]');
   await inputs[0].uploadFile(mp4);
   await inputs[1].uploadFile(csv);
   for (const bt of await p.$$('button')) if ((await bt.evaluate((e) => e.textContent)).includes('Run on video')) { await bt.click(); break; }
   await p.waitForFunction(() => [...document.querySelectorAll('button')].some((x) => x.textContent.includes('Centroid log CSV')) || document.querySelector('.warn'), { timeout: 180000 });
-  const m = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('.tbl.small tr')].map((r) => [r.cells[0].innerText, r.cells[1].innerText])));
+  const m = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('.tbl.small tr')].map((r) => [r.cells[0].textContent, r.cells[1].textContent])));
   await b.close();
   console.log(JSON.stringify(m, null, 1));
   const ok = errs.length === 0 && Number(m.centroidingErrorRmsePx) < 1.0 && Number(m.lockRetentionRatePct) >= 99 && Number(m.acquisitionTimeSec) <= 0.2 && Number(m.groundTruthFrames) >= N - 2;

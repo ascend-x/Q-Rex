@@ -45,6 +45,8 @@ export class Simulation {
     this.wander = { x: 0, y: 0 };
     this.logScint = 0;
     this.records = [];
+    this._settled = undefined; // GUI cache: first frame centred within 10 px
+    this._settledScan = 0;
     this.last = null;
     this.procTotal = 0;
     this.wallStart = null;
