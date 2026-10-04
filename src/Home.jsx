@@ -9,6 +9,7 @@ const NAV = [
   ['architecture', 'Architecture'],
   ['innovation', 'Innovation'],
   ['stack', 'Tech Stack'],
+  ['maths', 'Maths'],
   ['results', 'Results'],
   ['compliance', 'Compliance'],
   ['roadmap', 'Roadmap'],
@@ -57,7 +58,7 @@ const TABS = {
       '74 k-parameter convolutional network on a 32×32 window around each detector candidate (≈ 2 ms).',
       'Trained on ≈ 590 k simulator patches: random noise mixes, fog / rain / low light, zoomed-out views, video-codec artefacts, 5–20 px beacons of any shape and brightness.',
       'Hard negatives are the detector’s own false alarms on beacon-free frames — exactly what it will meet in service.',
-      'Held-out test: 99.4 % accuracy; hard test (faint, foggy, noisy) 97.8 %; compressed-video test 99.6 %. JS inference matches PyTorch to 1e-6.',
+      'Held-out test: 99.4 % accuracy; hard test (faint, foggy, noisy) 97.4 %; compressed-video test 99.6 %. JS inference matches PyTorch to 1e-6.',
       'Effect (measured): on low-light, rain, zoomed-out and compressed-video frames, false alarms on empty frames fall from 10–14 % to 0–2 %; faint beacons in fog are kept as well as by the classical detector (93 %). It does not improve centroid accuracy, so the classical centroid is kept.',
       'Fail-safe: very strong classical detections are never vetoed; the classical detector remains the fallback.',
     ],
@@ -122,6 +123,69 @@ const EVAL = [
   ['Benchmark 1 — scenarios', '30 %', 'One-click scenario suite, per-frame centroiding-error CSV, auto JSON/HTML/CSV performance logs.'],
   ['Benchmark 2 — .mp4 video', '30 %', 'Frame-exact video input, PTZ bypassed, centroid log, RMSE / acquisition / re-acquisition / lock / FPS, ground-truth comparison.'],
   ['Technical evaluation', '20 %', '14-page report, architecture, trained CNN with measured ablation, traceability matrix, honest limitations, roadmap, 54 tests.'],
+]
+
+const MATHS = [
+  ['Camera geometry', 'config.js · render.js', 'Screen pixels per camera pixel and the widest zoom FOV that still covers the whole screen.',
+`s = FOV · PPD / W_cam          (PPD = 160 px/°; s = 1 at 4°, 640 px)
+p_screen = c + (p_img − (W/2, H/2)) · s
+FOV_max = L / (PPD · H/W) = 2000 / 120 = 16.7°
+error e = ‖p_beacon − c‖  (screen px, default FOV)`],
+  ['Sensor model', 'render.js', 'The beacon is integrated analytically over every pixel (no aliasing), then noise is added in a fixed order.',
+`B(i) = σ [G(z₁) − G(z₀) − (G(w₁) − G(w₀))]
+G(z) = z·Φ(z) + φ(z)        (antiderivative of Φ)
+σ_psf = √(0.5² + b_atm² + (1.2·τ_turb)²)
+noise:  Poisson → Gaussian σ → salt & pepper p → clip [0,255]`],
+  ['Robust noise & CFAR', 'detector.js', 'The detection threshold is learned from the image itself, so it needs no noise model.',
+`m = med(x)            σ = 1.4826 · med |x − m|     (MAD estimates)
+z = (M_s − m_M) / σ_M          hit if  z > T
+T = 6   (+2 after a median, +6 for dense impulses)
+σ_M ≥ max(0.15 σ_px / s, 0.02)`],
+  ['Matched filter', 'detector.js', 'A box of the beacon’s size is the optimal linear detector; an integral image makes it 4 reads per pixel.',
+`M_s(x,y) = [S(x+s,y+s) − S(x+s,y) − S(x,y+s) + S(x,y)] / s²
+white noise σ  →  σ_M = σ / s
+SNR = A · s / σ        e.g. A=58, s=10, σ=20  →  29
+scales s ∈ {5, 7, 10, 14, 20}, merged by NMS`],
+  ['Sub-pixel centroid', 'detector.js', 'Iterated intensity-weighted centroid on the thresholded blob; shape tests reject rain streaks.',
+`w = max(I − b − τ, 0)     τ = min(0.6A, max(0.3A, 2σ))
+c ← Σ w·(x+½, y+½) / Σ w     (≤ 4 iterations, stop < 0.02 px)
+ε = √(λ₁ / λ₂)     reject if ε > 2.6 or area < 0.35 s²`],
+  ['Impulse rejection', 'detector.js · videoTracker.js', 'Salt & pepper is removed before detection without erasing a 1–3 px zoomed-out beacon.',
+`median-of-9: 19-exchange sorting network (checked vs brute force)
+switching median: only 0/255 pixels → median of 5×5 non-extreme
+video coarse search, block of n = f² values sorted v(1) ≤ … ≤ v(n):
+   v_trim = 1/(n − 2k) · Σ v(j) for j = k+1 … n−k,   k = ⌊n/4⌋`],
+  ['Two-model IMM Kalman', 'kalman.js', 'Constant-velocity and constant-acceleration models run in parallel; probabilities follow the likelihoods.',
+`Q_CV = q [Δt⁴/4  Δt³/2 ; Δt³/2  Δt²]       F_CV = [1 Δt ; 0 1]
+Q_CA = q [Δt⁵/20 Δt⁴/8 Δt³/6 ; Δt⁴/8 Δt³/3 Δt²/2 ; Δt³/6 Δt²/2 Δt]
+mix:  cbar_j = Σ π_ij μ_i     μ_i|j = π_ij μ_i / cbar_j     Π = [.96 .04 ; .04 .96]
+update:  ν = z − Hx   S = HPHᵀ + R   K = PHᵀ/S   x += Kν   P −= K·HP
+Λ_m = e^(−ν²/2S) / √S      μ_m ∝ Λ_m · cbar_m`],
+  ['Noise is observable', 'kalman.js', 'The measurement noise is measured from the data, then process noise adapts to how well the model fits.',
+`Var(z_k − 2 z_k−1 + z_k−2) = 6R   ⇒   R_est = ( med|Δ²z| / (0.6745 √6) )²
+NIS = d²/2 ,   NIS_avg ← 0.8·NIS_avg + 0.2·min(NIS, 9)
+q_s ← 1.8 q_s (2× NIS > 4.5) | 1.2 q_s (avg > 1.4) | 0.97 q_s (avg < 0.8)
+gate: d² = Σ ν²/(σ_p² + R) > 16 → reject (accept after 2 in a row)`],
+  ['Controller & gimbal', 'tracker.js · gimbal.js', 'Feed-forward plus feedback, with a minimum-time stopping profile that respects the mount’s acceleration limit.',
+`aim:  p_aim = p + vτ + ½ μ_CA a τ²,   v_aim = v + μ_CA a τ   (τ = Δt)
+u = g · d/Δt + (1 − g) · v_aim          g = 0.6
+|u − v_aim| ≤ √( 2 · 0.85 · a_max · |d| )     (stop in time)
+gimbal:  |v| ≤ v_max ,  |Δv| ≤ a_max Δt ,  p ← p + v Δt`],
+  ['Zoom-lens acquisition', 'tracker.js', 'The one camera starts fully zoomed out and narrows only as fast as the pointing error allows.',
+`m = 60 + 4 σ_p
+FOV_need = max( 2(|px − cx| + m) / PPD ,  2(|py − cy| + m) / (PPD · H/W) )
+FOV ∈ [FOV_min, FOV_max],   rate ≤ 12 °/s
+beacon of d screen px is d / s camera px  →  box sizes scaled by 1/s`],
+  ['Learned verifier (CNN)', 'cnn.js · ml/train.py', 'A 74 k-parameter network judges each candidate; a strong classical hit is never vetoed.',
+`x = asinh( (v − b) / (3 σ) )     b, σ = robust background / noise;  32×32 patch
+conv 1→16 → 24 → 32 → 48 (3×3, stride 2 ×3) → FC 768→64 → FC 64→3
+L = BCE(ℓ, y) + SmoothL1( d_pred , d / 8 )     (offset head, positives)
+veto  iff  p = σ(ℓ) < 0.5  and  z < 25`],
+  ['Why 10 px is a floor', 'floor-analysis.mjs', 'White jitter cannot be predicted one frame ahead, so no causal filter beats a bound — measured, not assumed.',
+`e_next = ‖p(k+1) − p_pred(k+1 | k)‖ ≥ spread of the unpredictable part
+best Kalman (orders 1–4, Q swept) on the real sequences ≈ 10.4 px
+closed loop: 10.8 px @ 60 °/s²,  10.6 px @ 100 and 200 °/s²
+RMSE = √( 1/N · Σ e_k² )`],
 ]
 
 const ROADMAP_DONE = [
@@ -268,8 +332,21 @@ export default function Home() {
           <tbody>{STACK.map(([a, b, c]) => <tr key={a}><td><b>{a}</b></td><td className="mono">{b}</td><td>{c}</td></tr>)}</tbody></table></div>
       </section>
 
+      <section id="maths" className="hsec">
+        <div className="label">05 / Mathematics</div>
+        <div className="shead"><h2>The maths it actually runs</h2>
+          <p className="subtext">Every formula below is the one in the code, with its real constants. The full derivations and symbols are in the README (§20).</p></div>
+        <div className="mathgrid">{MATHS.map(([h, f, p, m], i) => (
+          <article className="mathcard" key={h}>
+            <div className="mhead"><span className="mnum">{String(i + 1).padStart(2, '0')}</span><h3>{h}</h3></div>
+            <p>{p}</p>
+            <pre className="formula">{m}</pre>
+            <div className="mfile">{f}</div>
+          </article>))}</div>
+      </section>
+
       <section id="results" className="hsec">
-        <div className="label">05 / Proof of concept</div>
+        <div className="label">06 / Proof of concept</div>
         <div className="shead"><h2>Benchmark results</h2>
           <p className="subtext">Mean over 3 seeds, 20 s each. Pass = all five checks (acquisition, error, loss, re-acquisition, FPS) met on every seed.</p></div>
         <div className="twrap"><table className="btable"><thead><tr><th>Scenario</th><th>Acq. s</th><th>Error px</th><th>Centroid px</th><th>Loss %</th><th>Lock %</th><th>Pass</th></tr></thead>
@@ -290,14 +367,14 @@ E2E VIDEO: PASS`}</pre>
       </section>
 
       <section id="compliance" className="hsec">
-        <div className="label">06 / Evaluation &amp; honest limits</div>
+        <div className="label">07 / Evaluation &amp; honest limits</div>
         <div className="shead"><h2>How it maps to the evaluation</h2></div>
         <div className="evals">{EVAL.map(([a, b, c]) => <div className="evalcard" key={a}><div className="pct">{b}</div><h4>{a}</h4><p>{c}</p></div>)}</div>
         <div className="limits"><h3>Stated plainly — what is not met</h3><ul>{LIMITS.map((x) => <li key={x}>{x}</li>)}</ul></div>
       </section>
 
       <section id="roadmap" className="hsec">
-        <div className="label">07 / Roadmap</div>
+        <div className="label">08 / Roadmap</div>
         <div className="shead"><h2>What is done and what comes next</h2>
           <p className="subtext">Planned work is listed with its reason and its cost. Two limits stay by physics: the 10.4 px causal floor of jitter + platform + all noise (a faster gimbal does not help) and the geometric 12.5 s sweep of a fixed-FOV scan.</p></div>
         <div className="bento">{ROADMAP_DONE.map(([h, p]) => <div key={h} className="tile third" style={{ gridColumn: "span 3", minHeight: 200 }}><div className="tag">Done</div><h3>{h}</h3><p>{p}</p></div>)}</div>

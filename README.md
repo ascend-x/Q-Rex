@@ -18,7 +18,7 @@ The app opens on a **home page** (overview, architecture diagrams, innovations, 
 ## Contents
 
 1. [At a glance](#1-at-a-glance)
-2. [Quick start](#2-quick-start)
+2. [Quick start and how to run](#2-quick-start-and-how-to-run)
 3. [System architecture](#3-system-architecture)
 4. [Repository layout](#4-repository-layout)
 5. [How one frame is processed](#5-how-one-frame-is-processed)
@@ -36,6 +36,7 @@ The app opens on a **home page** (overview, architecture diagrams, innovations, 
 17. [Specification compliance and honest limitations](#17-specification-compliance-and-honest-limitations)
 18. [Troubleshooting](#18-troubleshooting)
 19. [Roadmap and future work](#19-roadmap-and-future-work)
+20. [Mathematics reference](#20-mathematics-reference) (every formula as implemented)
 
 ---
 
@@ -69,43 +70,114 @@ causal filter that must hit the beacon one frame ahead bottoms out at ≈ 10.4 p
 
 ---
 
-## 2. Quick start
+## 2. Quick start and how to run
 
-Requirements: **Node.js ≥ 20** and npm. (ffmpeg + Chromium + a global `puppeteer` only for `npm run e2e`.)
+### 2.1 What you need
+
+| Goal | Needs |
+|---|---|
+| Just use the app | a modern browser (Chrome / Edge / Firefox) **or** the executable in `release/` — nothing else, no network |
+| Run from source, tests, benchmarks | **Node.js ≥ 20** (developed on 24) and npm |
+| Benchmark-2 video tests and the demo video | `ffmpeg` on the PATH; for `npm run e2e` and `npm run demo` also Chromium and a global `puppeteer` (`npm i -g puppeteer`) |
+| Retrain the CNN (optional) | Python 3.10+ and PyTorch (CPU is enough; a GPU makes it much faster) |
+| Desktop packaging | nothing extra — `npm install` brings Electron and the packager |
+
+### 2.2 Three ways to run it
+
+**A — Double-click, no install.** Open `dist-single/q-rex.html` in a browser. It is one self-contained offline file
+(fonts and code inlined). The home page is `#/`, the workstation is `#/app`.
+
+**B — Native executable (standalone).** Copy the folder for your platform from `release/` and run it:
+
+```bash
+release/q-rex-linux-x64/q-rex            # Linux   (add --no-sandbox if your kernel blocks the Chromium sandbox)
+release\q-rex-win32-x64\q-rex.exe        # Windows (copy the whole folder to the PC first)
+```
+
+If `release/` is missing, build it with `npm run build:exe` (see [§15](#15-build-packaging-and-the-release-folder)).
+
+**C — From source (development).**
 
 ```bash
 cd tracking-app
 npm install
+npm run dev            # live GUI → http://localhost:5173   (home page "/", workstation "/#/app")
+```
 
-npm run dev            # live GUI            → http://localhost:5173
-npm test               # 54 tests (engine + one per spec-table row + AI verifier + zoom lens)
-npm run bench -- 3 20  # headless scenario suite: 3 seeds × 20 s  (≈15 min)
-npm run e2e            # Benchmark-2 end-to-end test in headless Chromium
-npm run demo           # records the demo video  -> demo/q-rex-demo.mp4
-npm run ai:eval        # classical vs CNN-verified detector on fresh simulator frames
-node scripts/video-robustness.mjs   # 21 synthetic judge-style videos (needs ffmpeg)
-node scripts/floor-analysis.mjs     # lower bound for the jitter + platform case
-npm run selftest       # desktop-shell smoke test (Electron)
-QREX_ACQ=zoom npm run bench -- 3 20   # benchmark in camera-only zoom mode
+### 2.3 Using the workstation (a 2-minute tour)
+
+1. Open `#/app`. The tracker starts immediately on scenario **A1 Nominal**: the status bar shows `SEARCH → TRACK`, and the tiles
+   turn green when a spec target is met (acquisition ≤ 2 s, error ≤ 10 px, loss < 5 %, re-acquisition ≤ 1 s, FPS ≥ 20).
+2. **Change the world:** sidebar → *Target* (motion, speed, size, shape, decoys), *Image noise* (salt & pepper, Gaussian, Poisson),
+   *Jitter, platform, atmosphere*, *Virtual camera* (FOV, resolution, pan/tilt speed, acceleration), *Tracker* (acquisition mode
+   wide-view / zoom lens / scan, control gain, threshold, **AI verifier**). Everything applies live; **Restart** re-runs with the same seed.
+3. **Benchmark 1** — press *Run all scenarios* (15 built-in scenarios, choose seconds and seeds). A table with pass/fail per check
+   appears; *Export suite JSON* saves it.
+4. **Benchmark 2** — choose an `.mp4` (a full-screen view of any size ≥ 1000 px, or a camera image), optionally a ground-truth CSV
+   (`frame,x,y` or `time_s,x,y`) and its coordinate convention, set the frame rate (30), optionally tick **AI verifier**, press
+   *Run on video*. You get acquisition time, lock retention, centroid RMSE, FPS, re-acquisition and a per-frame centroid CSV.
+5. **Logs:** every timed run auto-saves a JSON / CSV / HTML performance report (toggle in the sidebar); the toolbar buttons
+   *JSON / CSV / HTML* export the current run on demand.
+
+### 2.4 Command reference
+
+```bash
+npm test               # 54 tests (engine + one per spec-table row + AI verifier + zoom lens), ≈ 2–4 min
 npm run lint           # oxlint
+npm run bench -- 3 20  # headless Benchmark-1 suite: 3 seeds × 20 s (≈ 15 min); optional 3rd arg filters a scenario id
+QREX_ACQ=zoom npm run bench -- 3 20   # same, in camera-only zoom-lens mode (also: overview | scan)
+QREX_AI=1 npm run bench -- 3 20       # same, with the CNN verifier on (ablation)
+QREX_ACCEL=100 npm run bench -- 3 20  # same, with a different gimbal acceleration limit (°/s²)
+
+node scripts/video-robustness.mjs        # 21 synthetic judge-style videos through the video tracker (needs ffmpeg)
+node scripts/video-robustness.mjs --ai   # same with the CNN verifier;  a name filter can be added: … "dim"
+node scripts/floor-analysis.mjs          # causal lower bound for the jitter + platform case
+npm run ai:eval                          # classical vs CNN-verified detector on fresh simulator frames
+npm run e2e                              # Benchmark-2 end-to-end test through the real GUI in headless Chromium
+npm run selftest                         # Electron desktop-shell smoke test
+npm run demo                             # records the demo video → demo/q-rex-demo.mp4 (≈ 5 min)
 
 npm run build          # normal Vite build        → dist/
 npm run build:single   # ONE offline HTML file    → dist-single/q-rex.html
 npm run build:exe      # native desktop app       → release/q-rex-<platform>-<arch>/
-node scripts/docs-pdf.mjs   # docs/*.md → docs/*.pdf
+node scripts/build-exe.mjs win32 x64     # a specific platform (linux | win32 | darwin) and arch (x64 | arm64)
+node scripts/docs-pdf.mjs                # docs/*.md → docs/*.pdf
 ```
 
-**Retrain the CNN (optional, needs Python + PyTorch):**
+**Expected results of a healthy checkout:** `npm test` → `54 pass, 0 fail`; `video-robustness` → `ALL PASS` (20 of 21 meet
+the pass line, the 21st is an informational extreme case); `npm run e2e` → `E2E VIDEO: PASS`; `npm run selftest` →
+`"selftest":"pass"`.
+
+### 2.5 Retrain the CNN (optional; needs Python + PyTorch)
+
+This is the recipe behind the shipped v4 weights (≈ 590 k patches, 74 k parameters, CPU, ≈ 1 h). Re-running it reproduces the setup and the accuracy level, not bit-identical weights (PyTorch initialisation and thread scheduling vary). Keep the **seed of every
+evaluation set different from every training seed** (an earlier hard set shared seed 9100 with a training file and had to be discarded).
 
 ```bash
-for i in 0 1 2 3 4 5 6 7; do node scripts/gen-dataset.mjs ml/data/train$i $((2000+i)) 1500 & done; wait
-node scripts/gen-dataset.mjs ml/data/val 6000 600; node scripts/gen-dataset.mjs ml/data/test 9000 600; node scripts/gen-dataset.mjs ml/data/hard 9100 600 hard
+D=ml/data_v3; mkdir -p $D
+# training data: normal mix (incl. zoomed-out and codec frames), hard fog/low-light/σ≥14, zoomed-out + hard
+for i in 0 1 2 3 4 5 6 7 8 9; do node scripts/gen-dataset.mjs $D/train$i $((2000+i)) 1500 & done
+for i in 0 1 2 3; do node scripts/gen-dataset.mjs $D/train_wh$i  $((7000+i*13)) 2500 whard & done
+for i in 0 1;     do node scripts/gen-dataset.mjs $D/train_h$i   $((9100+i*17)) 2500 hard  & done; wait
+# held-out sets (seeds not used above)
+node scripts/gen-dataset.mjs $D/val   8000 600;        node scripts/gen-dataset.mjs $D/test  9000 600
+node scripts/gen-dataset.mjs $D/hard  9777 600 hard;   node scripts/gen-dataset.mjs $D/codec 9200 600 codec
+node scripts/gen-dataset.mjs $D/wide  9300 600 wide
+
 python -m venv venv && venv/bin/pip install torch numpy --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
-EPOCHS=16 venv/bin/python ml/train.py     # writes src/engine/cnnWeights.json and ml/report.json (≈ 10 min on 16 CPU cores)
+WIDTH=wide DATA_DIR=$PWD/$D EPOCHS=18 OUT_WEIGHTS=$PWD/ml/weights/cnnWeights_v4.json venv/bin/python ml/train.py
+# evaluate any weights file on the held-out sets, then copy the winner to src/engine/cnnWeights.json
+WIDTH=wide venv/bin/python ml/eval_weights.py ml/weights/cnnWeights_v4.json $PWD/$D
+# regenerate the PyTorch reference used by tests/ai.test.mjs, then run the tests
+WIDTH=wide DATA_DIR=$PWD/$D venv/bin/python ml/export_check.py && cp ml/check.json tests/fixtures/cnn_reference.json && npm test
 ```
 
-Just want to run it? Open `dist-single/q-rex.html` in Chrome/Edge/Firefox (double-click, no server), or run the
-executable in `release/` ([§15](#15-build-packaging-and-the-release-folder)).
+With a CUDA GPU, `ml/train.py` can be moved to the GPU by adding `.to('cuda')` to the model and batches (see the roadmap, [§19](#19-roadmap-and-future-work)).
+
+### 2.6 If something does not start
+
+See [§18 Troubleshooting](#18-troubleshooting). The most common causes: Node older than 20, `ffmpeg` missing for the video scripts,
+or running the Linux executable without `--no-sandbox` on a locked-down kernel.
 
 ---
 
@@ -390,6 +462,8 @@ processing time, state, saturation flag, jitter and platform offsets.
 
 ## 7. Algorithms in detail
 
+> Every formula used by the detector, the filter, the controller and the CNN, with the constants the code really uses, is collected in [§20 Mathematics reference](#20-mathematics-reference).
+
 ### 7.1 Detection
 
 ```mermaid
@@ -512,7 +586,7 @@ flowchart LR
 * **Architecture:** conv3×3(1→16) → conv3×3/2(16→24) → conv3×3/2(24→32) → conv3×3/2(32→48) → FC(768→64) → FC(64→3: logit, dx, dy); ReLU; ≈ 1.7 M MACs per window (v1/v2 used a 37 k-parameter variant of half the width).
 * **Input normalisation:** window sampled (bilinear) from the detector's impulse-filtered image, `asinh((v − background) / (3σ))` with the frame's robust background and noise level.
 * **Training data (generated by the simulator, never from judges' data):** positives are real classical candidates on beacon frames plus random-offset windows (so the offset head learns its full ±6 px range); negatives are the detector's **own false alarms on beacon-free frames at a low threshold** (the hardest ones), plus random windows. Splits use disjoint seeds; a *hard test* set uses only foggy / low-light / σ ≥ 14 conditions with faint beacons.
-* **Held-out results:** test accuracy 99.39 %, AUC 0.9987, offset RMSE 0.45 px; hard test 97.8 % (true-positive rate 93.0 %), codec test 99.6 % (false-positive rate 0.6 %), zoomed-out (wide-FOV) test 98.5 % (true-positive rate 95.7 %). The test sets now also contain zoomed-out and video-codec patches, so the numbers are not comparable with v2's easier set. Zoomed-out beacon recall rose from about 70 % (v2) to 99 % in the detector ablation, codec-induced false alarms fell from 10-14 % to 0 %, and (v4) very faint beacons in fog are now recalled as well as by the classical detector (93 % vs 93 %; v3 lost 6 points). Remaining limit: on zoomed-out low-light + Poisson frames the verified detector hits 78 % against 91 % for the classical detector alone, but with 1 % instead of 82 % false-alarm frames.
+* **Held-out results:** test accuracy 99.39 %, AUC 0.9987, offset RMSE 0.45 px; hard test 97.4 % (true-positive rate 91.1 %, false-positive rate 0.4 %; v3 on the same set: 97.0 % / 89.0 %), codec test 99.6 % (false-positive rate 0.6 %), zoomed-out (wide-FOV) test 98.5 % (true-positive rate 95.7 %). The test sets now also contain zoomed-out and video-codec patches, so the numbers are not comparable with v2's easier set. Zoomed-out beacon recall rose from about 70 % (v2) to 99 % in the detector ablation, codec-induced false alarms fell from 10-14 % to 0 %, and (v4) very faint beacons in fog are now recalled as well as by the classical detector (93 % vs 93 %; v3 lost 6 points). Remaining limit: on zoomed-out low-light + Poisson frames the verified detector hits 78 % against 91 % for the classical detector alone, but with 1 % instead of 82 % false-alarm frames.
 * **Measured effect inside the detector** (`npm run ai:eval`, fresh frames, 120 per condition; "FA" = empty frame produced a candidate):
 
 | Condition | classical T=6: hit / FA | classical T=6 **+ CNN**: hit / FA |
@@ -876,7 +950,7 @@ throttling (so the simulation keeps real-time pacing) and loads `q-rex.html`.
    npm i
    npm i -D electron @electron/packager marked oxlint
    ```
-   Set `"type": "module"` and the scripts from [§2](#2-quick-start) in `package.json`; in `vite.config.js` use
+   Set `"type": "module"` and the scripts from [§2](#2-quick-start-and-how-to-run) in `package.json`; in `vite.config.js` use
    `base: './'` with `@vitejs/plugin-react`.
 2. **Create `src/engine/`** and write the modules in this order (each is testable on its own; the spec for each is in
    [§6](#6-module-reference) and [§7](#7-algorithms-in-detail)):
@@ -987,3 +1061,160 @@ are collected for the mentors; the interface, executables and PDFs are rebuilt.
 * Coordinated-turn model in the IMM; ego-motion estimation from a static background texture to cancel jitter when the scene has features.
 * Model-predictive control with rate / acceleration constraints; saturation-aware priority logic.
 * CI that builds and smoke-tests Windows and macOS executables on real runners (the workflow exists and runs on the first push).
+
+---
+
+## 20. Mathematics reference
+
+Every formula below is the one **implemented in the code** (file in brackets), with the constants it really uses.
+Symbols: $s$ screen-pixels per camera-pixel, $\Delta t = 1/\mathrm{fps}$, $\sigma$ noise standard deviation (grey levels).
+
+### 20.1 Camera geometry [`config.js`, `render.js`]
+
+$$\mathrm{PPD}=160\ \text{px/°},\qquad s=\frac{\mathrm{FOV}\cdot \mathrm{PPD}}{W_{cam}}\quad(=1 \text{ at } 4^\circ,\ 640\text{ px}),\qquad
+\mathbf p_{screen}=\mathbf c+\Big(\mathbf p_{img}-\tfrac12(W,H)\Big)\,s$$
+
+The zoom lens must cover the whole square screen of side $L$ on its 4:3 frame, so its widest field of view is
+$\mathrm{FOV}_{max}=\dfrac{L}{\mathrm{PPD}\cdot H/W}=\dfrac{2000}{160\cdot 0.75}=16.7^\circ$.
+Tracking error is $e=\lVert \mathbf p_{beacon}-\mathbf c\rVert$ in screen pixels at the default FOV.
+
+### 20.2 Sensor model [`render.js`]
+
+A square beacon of half-width $a$ blurred by a Gaussian point-spread function of width $\sigma_{psf}$ is integrated analytically over each pixel $[i,i+1]$
+(no aliasing, exact sub-pixel motion). With $G(z)=z\,\Phi(z)+\varphi(z)$ (the antiderivative of the normal CDF $\Phi$):
+
+$$B_x(i)=\sigma_{psf}\Big[G(z_{1})-G(z_{0})-\big(G(w_{1})-G(w_{0})\big)\Big],\qquad
+z_0=\frac{i-c_x+a}{\sigma_{psf}},\ z_1=\frac{i+1-c_x+a}{\sigma_{psf}},\ w_0=\frac{i-c_x-a}{\sigma_{psf}},\ w_1=\frac{i+1-c_x-a}{\sigma_{psf}}$$
+
+$$I(x,y)=\text{bg}\cdot k_{contrast}+k_{bright}+A\,k_{contrast}\,B_x B_y,\qquad
+\sigma_{psf}=\sqrt{0.5^2+b_{atm}^2+(1.2\,\tau_{turb})^2}$$
+
+Noise is applied in this order and then clipped to $[0,255]$:
+Poisson $v\leftarrow g\cdot\mathrm{Poisson}(v/g)$ → Gaussian $v\leftarrow v+\sigma\,\mathcal N(0,1)$ → salt & pepper (each pixel with probability $p$: half become 0, half 255).
+
+### 20.3 Impulse-noise rejection [`detector.js`, `videoTracker.js`]
+
+* **3×3 median** by the 19-exchange sorting network (Devillard's `opt_med9`), border pixels replicated; a second pass if more than 2 % of pixels are salt.
+* **Switching median** (zoomed-out beacons of 1–3 px): only pixels at 0 or 255 are replaced, by the median of the non-extreme pixels in their 5×5 (then 7×7) neighbourhood, so a genuine small blob survives.
+* **Trimmed block mean** (video coarse search): for an $f\times f$ block sorted as $v_{(1)}\le\dots\le v_{(n)}$, $n=f^2$ and $k=\lfloor n/4\rfloor$:
+  $\bar v=\dfrac{1}{n-2k}\sum_{j=k+1}^{n-k}v_{(j)}$ — a plain mean would pass the impulses straight into the down-sampled image.
+
+### 20.4 Matched-filter detector with self-calibrated CFAR [`detector.js`]
+
+Robust noise estimate from the median and the median absolute deviation:
+
+$$\hat\mu=\operatorname{med}(x),\qquad \hat\sigma=1.4826\;\operatorname{med}\lvert x-\hat\mu\rvert$$
+
+A box of side $s$ is the matched filter for a square beacon of the same size; with an integral image $S$ it costs four reads per pixel:
+
+$$M_s(x,y)=\frac{S(x{+}s,y{+}s)-S(x{+}s,y)-S(x,y{+}s)+S(x,y)}{s^2},\qquad
+z_s(x,y)=\frac{M_s(x,y)-\hat\mu_{M}}{\hat\sigma_{M}}$$
+
+For white noise $\sigma_{px}$ the filter output has $\sigma_M=\sigma_{px}/s$, so a beacon of amplitude $A$ gives the detection SNR
+
+$$\mathrm{SNR}=\frac{A\,s}{\sigma_{px}}\qquad\text{(e.g. } A=58,\ s=10,\ \sigma_{px}=20\ \Rightarrow\ 29\text{)}$$
+
+$\hat\sigma_M$ is floored at $\max(0.15\,\sigma_{px}/s,\,0.02)$. A hit is a pixel with $z_s>T$, with $T=6$ (+2 after a median, +6 after the double median for dense impulses).
+Candidates from the five scales $s\in\{5,7,10,14,20\}$ are merged by non-maximum suppression inside $r=0.75\max(s_i,s_j)+2$.
+
+**Sub-pixel centroid.** With local background $b$ (median of a ring $R{+}2\ldots R{+}6$ around the candidate, $R=\lceil s/2+4\rceil$), amplitude $A$ and
+threshold $\tau=\min(0.6A,\ \max(0.3A,\ 2\sigma))$, the weights are $w=\max(I-b-\tau,0)$ and
+
+$$\mathbf c\leftarrow\frac{\sum w\,(x+\tfrac12,\ y+\tfrac12)}{\sum w}$$
+
+iterated up to four times (stop when the move is below 0.02 px). From the second moments $\lambda_1\ge\lambda_2$ of the weighted blob the eccentricity is
+$\varepsilon=\sqrt{\lambda_1/\lambda_2}$; a candidate is rejected if its area is below $0.35\,s^2$, or, at high SNR, if $\varepsilon>2.6$ (rain streak).
+
+### 20.5 Tracking filter: two-model IMM Kalman [`kalman.js`]
+
+Per axis the state is $\mathbf x=[p,\ v,\ a]^\top$, the measurement is the position, $H=[1\ 0\ 0]$, and two motion models run in parallel.
+
+**Constant velocity (discrete white-noise acceleration, variance $q_{CV}$):**
+$$F_{CV}=\begin{bmatrix}1&\Delta t\\0&1\end{bmatrix},\qquad
+Q_{CV}=q_{CV}\begin{bmatrix}\Delta t^4/4&\Delta t^3/2\\ \Delta t^3/2&\Delta t^2\end{bmatrix}$$
+
+**Constant acceleration (continuous white-noise jerk, PSD $q_{CA}$):**
+$$F_{CA}=\begin{bmatrix}1&\Delta t&\Delta t^2/2\\0&1&\Delta t\\0&0&1\end{bmatrix},\qquad
+Q_{CA}=q_{CA}\begin{bmatrix}\Delta t^5/20&\Delta t^4/8&\Delta t^3/6\\ \Delta t^4/8&\Delta t^3/3&\Delta t^2/2\\ \Delta t^3/6&\Delta t^2/2&\Delta t\end{bmatrix}$$
+
+Defaults $q_{CV}=3\cdot10^4$, $q_{CA}=3\cdot10^7$, multiplied by an adaptive factor $q_s\in[0.05,\,0.4]$.
+
+**Interaction (mixing)** with model-transition matrix $\Pi=\begin{bmatrix}0.96&0.04\\0.04&0.96\end{bmatrix}$ and model probabilities $\mu_i$:
+$$\bar c_j=\sum_i\pi_{ij}\mu_i,\qquad \mu_{i|j}=\frac{\pi_{ij}\mu_i}{\bar c_j},\qquad
+\mathbf x_{0j}=\sum_i\mu_{i|j}\mathbf x_i,\qquad
+P_{0j}=\sum_i\mu_{i|j}\big[P_i+(\mathbf x_i-\mathbf x_{0j})(\mathbf x_i-\mathbf x_{0j})^\top\big]$$
+
+**Predict / update** per model: $\mathbf x\leftarrow F\mathbf x,\ P\leftarrow FPF^\top+Q$; then with innovation $\nu=z-H\mathbf x$, $S=HPH^\top+R$, $K=PH^\top/S$:
+
+$$\mathbf x\leftarrow\mathbf x+K\nu,\qquad P\leftarrow P-K\,HP,\qquad
+\Lambda_m=\frac{1}{\sqrt{S}}\,e^{-\nu^2/2S},\qquad \mu_m\leftarrow\frac{\Lambda_m\bar c_m}{\sum_j\Lambda_j\bar c_j}\ \ (\mu_m\ge0.02)$$
+
+**Gating and robustness.** $d^2=\sum_{axes}\nu^2/(\sigma_p^2+R)$ is compared with a chi-square-style gate (2 d.o.f.): 16 by default (slew and track), 40 when re-detecting after a coast, 30–60 for wide-view assists.
+A measurement is rejected if $d^2>$ gate, but after two consecutive rejections it is accepted (the model, not the measurement, is wrong). For mild outliers a Huber-style inflation
+$R\leftarrow R\cdot\max(1,\ \sqrt{d^2/2}/2)$ is used.
+
+**Measurement noise $R$ is observable.** For smooth motion the second difference of consecutive measurements has variance $6R$, so
+
+$$\mathrm{Var}(z_k-2z_{k-1}+z_{k-2})=6R\ \Rightarrow\ \hat R=\Big(\frac{\operatorname{med}\lvert\Delta^2 z\rvert}{0.6745\,\sqrt6}\Big)^2$$
+
+(median-based, so a manoeuvre does not inflate it). $R=\max\big[(\sigma_z\,r_s)^2,\ \hat R,\ \text{prior}^2\big]$ where the detector's own centroid uncertainty is
+$\sigma_z=\big(0.25+\tfrac{s}{2q}\big)\,s_{scale}\,(\times3\text{ at the image edge})$, $q=\max(A/\sigma_{px},1)$.
+
+**Process-noise adaptation (NIS).** With the normalised innovation squared $\mathrm{NIS}=d^2/2$ and $\overline{\mathrm{NIS}}\leftarrow0.8\,\overline{\mathrm{NIS}}+0.2\min(\mathrm{NIS},9)$:
+
+$$q_s\leftarrow\begin{cases}1.8\,q_s&\text{two consecutive }\mathrm{NIS}>4.5\ \text{(manoeuvre)}\\1.2\,q_s&\overline{\mathrm{NIS}}>1.4\ \text{(model too stiff)}\\0.97\,q_s&\overline{\mathrm{NIS}}<0.8\ \text{(model too loose)}\end{cases}\qquad q_s\in[q_{floor},q_{max}]$$
+
+**One-frame-ahead aim point** (the camera must point where the beacon *will be* at the next exposure, $\tau=\Delta t$):
+$\hat p(\tau)=p+v\tau+\tfrac12\mu_{CA}\,a\,\tau^2$, $\hat v(\tau)=v+\mu_{CA}\,a\,\tau$.
+
+### 20.6 Controller and gimbal [`tracker.js`, `gimbal.js`]
+
+With pointing error $d=\hat p-c$, aim velocity $\hat v$, control gain $g=0.6$ and the gimbal's acceleration limit $a_{max}$, the commanded velocity per axis is
+
+$$u=g\,\frac{d}{\Delta t}+(1-g)\,\hat v,\qquad \lvert u-\hat v\rvert\le\sqrt{2\cdot0.85\,a_{max}\,\lvert d\rvert}\ \ \text{(minimum-time stopping profile)}$$
+
+The virtual gimbal clamps the speed to $v_{max}$ (5–10 °/s $\times$ PPD), limits the change per frame to $\lvert\Delta v\rvert\le a_{max}\Delta t$, integrates $p\leftarrow p+v\Delta t$, and stops at $[-450,\,L+450]$
+(the range extends past the screen so platform offsets stay compensable). While coasting, $\hat v$ is faded by $\max(0,\ 1-n_{coast}/1.5N_{coast})$.
+
+**Why 10 px cannot be reached with every disturbance at once.** Per-frame jitter is white, so it is unpredictable one frame ahead; no causal predictor can do better than the spread of that
+unpredictable part. `scripts/floor-analysis.mjs` measures the best one-frame-ahead error over orders 1–4 of Kalman filters on the real sequences: ≈ 10.4 px (the closed loop reaches 10.6 px at 100 and 200 °/s², 10.8 px at the default 60 °/s²).
+
+### 20.7 Zoom-lens acquisition [`tracker.js`]
+
+The lens starts at $\mathrm{FOV}_{max}$ and narrows only as fast as the pointing error allows. With margin $m=60+4\sigma_p$ and the camera's aspect ratio $\rho=H/W$:
+
+$$\mathrm{FOV}_{need}=\max\!\Big(\frac{2(\lvert\hat p_x-c_x\rvert+m)}{\mathrm{PPD}},\ \frac{2(\lvert\hat p_y-c_y\rvert+m)}{\mathrm{PPD}\,\rho}\Big),\qquad \mathrm{FOV}\in[\mathrm{FOV}_{min},\mathrm{FOV}_{max}]$$
+
+The rate is limited by `zoomRate` (12 °/s). A beacon of size $d$ screen-pixels appears $d/s$ camera-pixels wide, so the detector's box sizes are rescaled by $1/s$ as the lens moves.
+
+### 20.8 Learned verifier [`cnn.js`, `patch.js`, `ml/train.py`]
+
+Input: a $32\times32$ window sampled bilinearly from the detector's impulse-filtered image, normalised with the frame's robust statistics and compressed so bright beacons do not dominate:
+
+$$x=\operatorname{asinh}\!\Big(\frac{v-\hat b}{3\hat\sigma}\Big)$$
+
+Network (73 867 parameters): conv3×3(1→16) → conv3×3/2(16→24) → conv3×3/2(24→32) → conv3×3/2(32→48) → FC(768→64) → FC(64→3), ReLU, outputs (logit, $\hat d_x$, $\hat d_y$), offsets in units of 8 px.
+Training loss over a batch, with $y\in\{0,1\}$ and $\mathcal P$ the positives:
+
+$$\mathcal L=\operatorname{BCE}\big(\ell,\ y\big)+\operatorname{SmoothL1}\!\Big(\hat{\mathbf d}_{\mathcal P},\ \tfrac{\mathbf d_{\mathcal P}}{8}\Big)$$
+
+Augmentation: the beacon physics is invariant under the dihedral group, so batches are randomly mirrored and transposed with the offsets transformed accordingly.
+At run time the probability is $p=\sigma(\ell)$ and a candidate is vetoed iff $p<0.5$ **and** its classical SNR $z<25$ (a strong classical hit is never vetoed).
+
+### 20.9 Video tracker (Benchmark 2) [`videoTracker.js`]
+
+* **Search scoring:** $\;\text{score}=z\,e^{-\lVert\mathbf p-\mathbf p_{last}\rVert/350}$ (prefer a hit near the last known position).
+* **Tracking-window winner:** among candidates inside radius $R$ of the prediction $\mathbf p_{pred}=\mathbf p_{last}+\mathbf v$:
+  $\;\text{score}=z\,\exp\!\big[-\tfrac12\big(d/(0.6R)\big)^2\big]$ — SNR weighted by closeness, so a fast beacon 40 px away still beats a static noise blob next to the prediction.
+* **Velocity:** $\mathbf v\leftarrow0.6\,\mathbf v+0.4\,(\mathbf p_{new}-\mathbf p_{last})$; while coasting $\mathbf v\leftarrow0.7\,\mathbf v$ each frame and the prediction is clamped to the frame.
+* **Weak-detection retry** (only if the smoothed $\bar z=0.7\bar z+0.3z<25$, i.e. the beacon was already faint): threshold 3.5 inside a 40 px gate.
+* **Lock logic:** two consistent detections (< 60 px apart) lock; 15 consecutive misses drop the lock. Output uses the OpenCV pixel-index convention (centre of the first pixel $=0$), i.e. $x_{out}=x-0.5$.
+
+### 20.10 Metrics [`metrics.js`, `videoTracker.js`]
+
+$$\mathrm{RMSE}=\sqrt{\tfrac1N\sum_k e_k^2},\qquad
+\text{lock retention}=\frac{\#\{\text{frames in TRACK/COAST, beacon in FOV, estimate within 60 px}\}}{\#\{\text{frames since first lock}\}},\qquad
+\text{loss}=\frac{\#\{\text{beacon outside FOV after first lock}\}}{\#\{\text{frames since first lock}\}}$$
+
+Acquisition time is the simulation time from the start to the first confirmed lock; re-acquisition time is the time from leaving TRACK to the next TRACK (maximum over events);
+P95 is the 95th percentile of the per-frame centroid error.
