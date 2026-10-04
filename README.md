@@ -1103,7 +1103,7 @@ Poisson $v\leftarrow g\cdot\mathrm{Poisson}(v/g)$ → Gaussian $v\leftarrow v+\s
 
 Robust noise estimate from the median and the median absolute deviation:
 
-$$\hat\mu=\operatorname{med}(x),\qquad \hat\sigma=1.4826\;\operatorname{med}\lvert x-\hat\mu\rvert$$
+$$\hat\mu=\mathrm{med}(x),\qquad \hat\sigma=1.4826\;\mathrm{med}\lvert x-\hat\mu\rvert$$
 
 A box of side $s$ is the matched filter for a square beacon of the same size; with an integral image $S$ it costs four reads per pixel:
 
@@ -1155,7 +1155,7 @@ $R\leftarrow R\cdot\max(1,\ \sqrt{d^2/2}/2)$ is used.
 
 **Measurement noise $R$ is observable.** For smooth motion the second difference of consecutive measurements has variance $6R$, so
 
-$$\mathrm{Var}(z_k-2z_{k-1}+z_{k-2})=6R\ \Rightarrow\ \hat R=\Big(\frac{\operatorname{med}\lvert\Delta^2 z\rvert}{0.6745\,\sqrt6}\Big)^2$$
+$$\mathrm{Var}(z_k-2z_{k-1}+z_{k-2})=6R\ \Rightarrow\ \hat R=\Big(\frac{\mathrm{med}\lvert\Delta^2 z\rvert}{0.6745\,\sqrt6}\Big)^2$$
 
 (median-based, so a manoeuvre does not inflate it). $R=\max\big[(\sigma_z\,r_s)^2,\ \hat R,\ \text{prior}^2\big]$ where the detector's own centroid uncertainty is
 $\sigma_z=\big(0.25+\tfrac{s}{2q}\big)\,s_{scale}\,(\times3\text{ at the image edge})$, $q=\max(A/\sigma_{px},1)$.
@@ -1191,12 +1191,12 @@ The rate is limited by `zoomRate` (12 °/s). A beacon of size $d$ screen-pixels 
 
 Input: a $32\times32$ window sampled bilinearly from the detector's impulse-filtered image, normalised with the frame's robust statistics and compressed so bright beacons do not dominate:
 
-$$x=\operatorname{asinh}\!\Big(\frac{v-\hat b}{3\hat\sigma}\Big)$$
+$$x=\mathrm{asinh}\!\Big(\frac{v-\hat b}{3\hat\sigma}\Big)$$
 
 Network (73 867 parameters): conv3×3(1→16) → conv3×3/2(16→24) → conv3×3/2(24→32) → conv3×3/2(32→48) → FC(768→64) → FC(64→3), ReLU, outputs (logit, $\hat d_x$, $\hat d_y$), offsets in units of 8 px.
 Training loss over a batch, with $y\in\{0,1\}$ and $\mathcal P$ the positives:
 
-$$\mathcal L=\operatorname{BCE}\big(\ell,\ y\big)+\operatorname{SmoothL1}\!\Big(\hat{\mathbf d}_{\mathcal P},\ \tfrac{\mathbf d_{\mathcal P}}{8}\Big)$$
+$$\mathcal L=\mathrm{BCE}\big(\ell,\ y\big)+\mathrm{SmoothL1}\!\Big(\hat{\mathbf d}_{\mathcal P},\ \tfrac{\mathbf d_{\mathcal P}}{8}\Big)$$
 
 Augmentation: the beacon physics is invariant under the dihedral group, so batches are randomly mirrored and transposed with the offsets transformed accordingly.
 At run time the probability is $p=\sigma(\ell)$ and a candidate is vetoed iff $p<0.5$ **and** its classical SNR $z<25$ (a strong classical hit is never vetoed).
